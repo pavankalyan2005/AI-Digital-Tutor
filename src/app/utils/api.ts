@@ -79,7 +79,7 @@ export const api = {
   },
   get: async (url: string, options?: { timeoutMs?: number }) => {
     const controller = new AbortController();
-    const timeoutMs = options?.timeoutMs || 4000;
+    const timeoutMs = options?.timeoutMs || 10000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {

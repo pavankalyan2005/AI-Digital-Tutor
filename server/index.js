@@ -1532,8 +1532,8 @@ app.post("/api/projects", authenticateToken, async (req, res, next) => {
   }
 });
 
-// Coding challenges (requires auth to prevent unauthorized scraping)
-app.get("/api/code/challenges", authenticateToken, async (req, res, next) => {
+// Coding challenges (public GET for guest exploration; code execution requires auth & rate limits)
+app.get("/api/code/challenges", async (req, res, next) => {
   try {
     const challenges = await dbAll("SELECT id, title, description, category, difficulty, initial_code, language FROM coding_challenges");
     res.json(challenges);

@@ -89,8 +89,14 @@ export function CodingArena() {
           selectChallenge(formattedList[0]);
         }
 
-        const stats = await api.stats.getProgress();
-        setXp(stats.points);
+        try {
+          const stats = await api.stats.getProgress();
+          if (stats && typeof stats.points === "number") {
+            setXp(stats.points);
+          }
+        } catch (e) {
+          // Guest user or offline progress — non-critical for viewing challenges
+        }
       } catch (err) {
         toast.error("Failed to load Coding Arena.");
       }
