@@ -3,6 +3,7 @@ import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import helmet from "helmet";
 import { initializeApp as initFirebaseAdmin, cert } from "firebase-admin/app";
 import { getAuth as getFirebaseAuth } from "firebase-admin/auth";
 import { readFileSync, existsSync } from "fs";
@@ -51,10 +52,34 @@ try {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || "ai_digital_tutor_secret_key_123456";
+
+// Fail fast if JWT_SECRET is not configured — never fall back to a weak hardcoded value
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error("FATAL: JWT_SECRET environment variable is not set. Refusing to start.");
+  console.error("Run: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\" and add to server/.env");
+  process.exit(1);
+}
 
 // Middlewares
-app.use(cors({ origin: "*" }));
+// Security headers (Helmet must come first, before any routes)
+app.use(helmet({
+  contentSecurityPolicy: false // Disable strict CSP to allow embeds (YouTube, etc.)
+}));
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  process.env.FRONTEND_URL
+].filter(Boolean);
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, server-to-server)
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS policy: origin not allowed"));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '1mb' })); // Limit payload size
 
 // Simple request logger
@@ -81,6 +106,15 @@ const codeExecuteLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 10,
   message: { error: "Execution limit reached. Please try again in a minute." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for authentication endpoints — prevents brute-force & credential stuffing
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // 15 attempts per 15-min window per IP
+  message: { error: "Too many authentication attempts. Please try again in 15 minutes." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -132,7 +166,7 @@ async function requireAdmin(req, res, next) {
 // 1. AUTHENTICATION & PROFILE ROUTES
 // ----------------------------------------------------
 
-app.post("/api/auth/signup", async (req, res, next) => {
+app.post("/api/auth/signup", authLimiter, async (req, res, next) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
@@ -171,7 +205,7 @@ app.post("/api/auth/signup", async (req, res, next) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res, next) => {
+app.post("/api/auth/login", authLimiter, async (req, res, next) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
@@ -215,12 +249,19 @@ app.post("/api/auth/google", async (req, res, next) => {
   }
 
   // Verify Firebase ID token if Firebase Admin SDK is initialized and idToken is provided
+  // SECURITY: If token verification fails we MUST reject the request — not silently continue
   if (idToken && firebaseAdminApp) {
     try {
       const decodedToken = await getFirebaseAuth().verifyIdToken(idToken);
       console.log(`[Firebase Admin] Verified ID Token for email: ${decodedToken.email}`);
     } catch (tokenErr) {
-      console.warn("[Firebase Admin] Token verification notice:", tokenErr.message);
+      console.warn("[Firebase Admin] Token verification failed:", tokenErr.message);
+      return res.status(401).json({ error: "Invalid Google credential. Authentication failed. Please sign in again." });
+    }
+  } else if (!idToken) {
+    // If Firebase Admin is available but no token was sent, reject
+    if (firebaseAdminApp) {
+      return res.status(401).json({ error: "Google ID token is required for authentication." });
     }
   }
 
@@ -528,7 +569,8 @@ app.get("/api/courses/modules/:id", async (req, res, next) => {
 // ADMIN ROUTES (FIXES 404)
 // ----------------------------------------------------
 
-app.post("/api/admin/courses", authenticateToken, async (req, res, next) => {
+// SECURITY: All /api/admin/* routes require BOTH authenticateToken AND requireAdmin
+app.post("/api/admin/courses", authenticateToken, requireAdmin, async (req, res, next) => {
   const { id, title, description, category, difficulty, duration } = req.body;
   try {
     const cat = await dbGet("SELECT id FROM categories WHERE name = ?", [category]);
@@ -542,7 +584,7 @@ app.post("/api/admin/courses", authenticateToken, async (req, res, next) => {
   }
 });
 
-app.delete("/api/admin/courses/:id", authenticateToken, async (req, res, next) => {
+app.delete("/api/admin/courses/:id", authenticateToken, requireAdmin, async (req, res, next) => {
   try {
     await dbRun("DELETE FROM courses WHERE id = ?", [req.params.id]);
     await dbRun("DELETE FROM modules WHERE course_id = ?", [req.params.id]);
@@ -552,7 +594,7 @@ app.delete("/api/admin/courses/:id", authenticateToken, async (req, res, next) =
   }
 });
 
-app.post("/api/admin/modules", authenticateToken, async (req, res, next) => {
+app.post("/api/admin/modules", authenticateToken, requireAdmin, async (req, res, next) => {
   const { course_id, title, duration, video_url, video_duration, channel_name, rating, level, price_type, language } = req.body;
   const id = `mod-${Date.now()}`;
 
@@ -575,7 +617,7 @@ app.post("/api/admin/modules", authenticateToken, async (req, res, next) => {
   }
 });
 
-app.put("/api/admin/modules/:id", authenticateToken, async (req, res, next) => {
+app.put("/api/admin/modules/:id", authenticateToken, requireAdmin, async (req, res, next) => {
   const { title, video_url, video_duration } = req.body;
   try {
     await dbRun(
@@ -588,7 +630,7 @@ app.put("/api/admin/modules/:id", authenticateToken, async (req, res, next) => {
   }
 });
 
-app.delete("/api/admin/modules/:id", authenticateToken, async (req, res, next) => {
+app.delete("/api/admin/modules/:id", authenticateToken, requireAdmin, async (req, res, next) => {
   try {
     await dbRun("DELETE FROM modules WHERE id = ?", [req.params.id]);
     res.json({ success: true });
@@ -1778,11 +1820,7 @@ app.get("/api/progress/weekly", authenticateToken, async (req, res, next) => {
 // ADMIN ROUTES
 // ----------------------------------------------------
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 AI Digital Tutor server is running on port ${PORT} (0.0.0.0)`);
-});
-
-// Global Error Handler
+// Global Error Handler (must be registered BEFORE app.listen)
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
@@ -1791,10 +1829,14 @@ app.use((err, req, res, next) => {
   console.error(err);
 
   const status = err.status || 500;
+  const isDev = process.env.NODE_ENV !== "production";
   res.status(status).json({
-    error: err.message || "Internal server error",
-    details: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-    path: req.originalUrl,
-    method: req.method
+    error: isDev ? (err.message || "Internal server error") : "An error occurred. Please try again.",
+    ...(isDev && { details: err.stack, path: req.originalUrl, method: req.method })
   });
+});
+
+// Start listening AFTER all middleware and routes are registered
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 AI Digital Tutor server is running on port ${PORT} (0.0.0.0)`);
 });

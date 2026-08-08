@@ -3,3 +3,6 @@ node_modules
 tutor.db
 temp/
 *.log
+serviceAccountKey.json
+*.db-shm
+*.db-wal
