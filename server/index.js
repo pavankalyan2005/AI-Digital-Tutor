@@ -60,6 +60,7 @@ if (!JWT_SECRET) {
   console.error("Run: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\" and add to server/.env");
   process.exit(1);
 }
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "24h";
 
 // Middlewares
 // Security headers (Helmet must come first, before any routes)
@@ -172,6 +173,11 @@ app.post("/api/auth/signup", authLimiter, async (req, res, next) => {
     return res.status(400).json({ error: "Email and password are required." });
   }
 
+  // Password complexity policy — minimum 8 characters
+  if (typeof password !== "string" || password.length < 8) {
+    return res.status(400).json({ error: "Password must be at least 8 characters long." });
+  }
+
   try {
     const existingUser = await dbGet("SELECT id FROM users WHERE email = ?", [email]);
     if (existingUser) {
@@ -195,7 +201,7 @@ app.post("/api/auth/signup", authLimiter, async (req, res, next) => {
       [userId, email.split("@")[0], "https://api.dicebear.com/7.x/bottts/svg?seed=" + userId, 1, 0, 1, new Date().toISOString().split("T")[0]]
     );
 
-    const token = jwt.sign({ userId, email, role: assignedRole }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ userId, email, role: assignedRole }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     res.status(201).json({
       token,
       user: { id: userId, email, full_name: email.split("@")[0], role: assignedRole }
@@ -224,7 +230,7 @@ app.post("/api/auth/login", authLimiter, async (req, res, next) => {
 
     const userRole = user.role || 'student';
     const profile = await dbGet("SELECT * FROM profiles WHERE user_id = ?", [user.id]);
-    const token = jwt.sign({ userId: user.id, email: user.email, role: userRole }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ userId: user.id, email: user.email, role: userRole }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     res.json({
       token,
@@ -293,7 +299,7 @@ app.post("/api/auth/google", async (req, res, next) => {
     }
 
     const profile = await dbGet("SELECT * FROM profiles WHERE user_id = ?", [userId]);
-    const token = jwt.sign({ userId: user.id, email: user.email, role: userRole }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign({ userId: user.id, email: user.email, role: userRole }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     res.json({
       token,
@@ -1505,19 +1511,29 @@ app.post("/api/projects", authenticateToken, async (req, res, next) => {
   if (!title || !content) {
     return res.status(400).json({ error: "Title and content are required." });
   }
+
+  // Strip HTML tags to prevent Stored XSS
+  const sanitize = (str) => String(str || "").replace(/<[^>]*>?/gm, "").trim();
+  const cleanTitle = sanitize(title).slice(0, 255);
+  const cleanContent = sanitize(content).slice(0, 5000);
+
+  if (!cleanTitle || !cleanContent) {
+    return res.status(400).json({ error: "Valid non-HTML title and content are required." });
+  }
+
   try {
     const result = await dbRun(
       "INSERT INTO community_posts (user_id, title, content) VALUES (?, ?, ?)",
-      [req.user.userId, title, content]
+      [req.user.userId, cleanTitle, cleanContent]
     );
-    res.status(201).json({ id: result.lastID, title, content, likes: 0, comments_count: 0 });
+    res.status(201).json({ id: result.lastID, title: cleanTitle, content: cleanContent, likes: 0, comments_count: 0 });
   } catch (err) {
     next(err);
   }
 });
 
-// Coding challenges
-app.get("/api/code/challenges", async (req, res, next) => {
+// Coding challenges (requires auth to prevent unauthorized scraping)
+app.get("/api/code/challenges", authenticateToken, async (req, res, next) => {
   try {
     const challenges = await dbAll("SELECT id, title, description, category, difficulty, initial_code, language FROM coding_challenges");
     res.json(challenges);
@@ -1743,78 +1759,6 @@ app.get("/api/roadmaps/:skill", async (req, res, next) => {
     next(err);
   }
 });
-
-// ----------------------------------------------------
-// 7. SESSION TRACKING & WEEKLY PROGRESS
-// ----------------------------------------------------
-
-app.post("/api/sessions/start", authenticateToken, async (req, res, next) => {
-  const { feature, reference_id } = req.body;
-  const userId = req.user.userId;
-  if (!feature) return res.status(400).json({ error: "Feature identifier is required." });
-  try {
-    const result = await dbRun(
-      "INSERT INTO learning_sessions (user_id, feature, reference_id, started_at) VALUES (?, ?, ?, datetime('now'))",
-      [userId, feature, reference_id]
-    );
-    res.status(201).json({ sessionId: result.lastID });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post("/api/sessions/:id/end", authenticateToken, async (req, res, next) => {
-  const sessionId = req.params.id;
-  const userId = req.user.userId;
-  try {
-    const session = await dbGet("SELECT started_at FROM learning_sessions WHERE id = ? AND user_id = ?", [sessionId, userId]);
-    if (!session) return res.status(404).json({ error: "Session not found" });
-
-    await dbRun(
-      `UPDATE learning_sessions
-       SET ended_at = datetime('now'),
-           duration_seconds = CAST((julianday('now') - julianday(started_at)) * 86400 AS INTEGER)
-       WHERE id = ?`,
-      [sessionId]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.get("/api/progress/weekly", authenticateToken, async (req, res, next) => {
-  const userId = req.user.userId;
-  try {
-    // Get total duration per day for the last 7 days including today
-    // 0=Sunday, 1=Monday, ..., 6=Saturday
-    const rawStats = await dbAll(`
-      SELECT
-        strftime('%w', started_at) as day_index,
-        SUM(duration_seconds) as total_seconds
-      FROM learning_sessions
-      WHERE user_id = ?
-        AND started_at >= date('now', 'weekday 0', '-7 days')
-      GROUP BY day_index
-    `, [userId]);
-
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const statsMap = new Map(rawStats.map(s => [parseInt(s.day_index), s.total_seconds]));
-
-    const weeklyData = days.map((day, index) => ({
-      day,
-      hours: Math.round((statsMap.get(index) || 0) / 3600 * 10) / 10
-    }));
-
-    // Shift to start from Monday as per UI request (Mon-Sun)
-    const mondayFirst = [...weeklyData.slice(1), weeklyData[0]];
-    res.json(mondayFirst);
-  } catch (err) {
-    next(err);
-  }
-});
-
-
 
 // ----------------------------------------------------
 // ADMIN ROUTES
