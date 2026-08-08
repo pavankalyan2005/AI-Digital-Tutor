@@ -1,0 +1,14 @@
+{
+  "name": "appium-tests",
+  "version": "1.0.0",
+  "description": "Appium Mobile E2E Test Suite & Excel Report Generator for AI Digital Tutor Android App",
+  "main": "tests/appium-app-tests.js",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/appium-app-tests.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "webdriverio": "^8.46.0"
+  }
+}

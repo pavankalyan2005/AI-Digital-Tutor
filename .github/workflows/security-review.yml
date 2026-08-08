@@ -1,0 +1,384 @@
+﻿name: Security Review
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  detect-stack:
+    name: Detect Backend Technology
+    runs-on: ubuntu-latest
+    outputs:
+      stack: ${{ steps.detect.outputs.stack }}
+      server_dir: ${{ steps.detect.outputs.server_dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect stack
+        id: detect
+        run: |
+          if [ -f "server/package.json" ]; then
+            STACK=$(node -e "const p=require('./server/package.json'); const d=p.dependencies||{}; if(d.express) console.log('nodejs-express'); else if(d.fastify) console.log('nodejs-fastify'); else console.log('nodejs');")
+            echo "stack=$STACK" >> $GITHUB_OUTPUT
+            echo "server_dir=server" >> $GITHUB_OUTPUT
+          elif [ -f "package.json" ]; then
+            echo "stack=nodejs" >> $GITHUB_OUTPUT
+            echo "server_dir=." >> $GITHUB_OUTPUT
+          elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
+            echo "stack=python" >> $GITHUB_OUTPUT
+            echo "server_dir=." >> $GITHUB_OUTPUT
+          elif [ -f "pom.xml" ]; then
+            echo "stack=java-spring" >> $GITHUB_OUTPUT
+            echo "server_dir=." >> $GITHUB_OUTPUT
+          else
+            echo "stack=unknown" >> $GITHUB_OUTPUT
+            echo "server_dir=." >> $GITHUB_OUTPUT
+          fi
+          echo "Detected stack: $STACK"
+
+  sast-semgrep:
+    name: SAST - Semgrep
+    runs-on: ubuntu-latest
+    needs: detect-stack
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/owasp-top-ten
+            p/nodejs
+            p/javascript
+            p/secrets
+            p/jwt
+            p/sql-injection
+            p/command-injection
+            p/xss
+          generateSarif: "1"
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: true
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+        continue-on-error: true
+
+      - name: Semgrep - Secrets scan
+        run: |
+          pip install semgrep
+          semgrep --config=p/secrets --output semgrep-secrets.json --json . || true
+          echo "Semgrep secrets scan complete"
+
+      - name: Upload semgrep results
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: |
+            semgrep.sarif
+            semgrep-secrets.json
+        continue-on-error: true
+
+  secret-scan-gitleaks:
+    name: Secret Scanning - Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret detection
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+
+      - name: Gitleaks - Manual scan
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          ./gitleaks detect --source . --report-format json --report-path gitleaks-report.json --no-git || true
+          cat gitleaks-report.json | head -100 || echo "No secrets found by Gitleaks"
+
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+        continue-on-error: true
+
+  dependency-scan:
+    name: Dependency Scanning
+    runs-on: ubuntu-latest
+    needs: detect-stack
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: NPM Audit - Root
+        run: |
+          npm install --package-lock-only || true
+          npm audit --json > npm-audit-root.json || true
+          echo "Root audit complete"
+          cat npm-audit-root.json | node -e "
+            const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8'));
+            const v=d.vulnerabilities||{};
+            const counts={critical:0,high:0,moderate:0,low:0};
+            Object.values(v).forEach(x=>counts[x.severity]=(counts[x.severity]||0)+1);
+            console.log('Vulnerabilities:', JSON.stringify(counts));
+          " || true
+
+      - name: NPM Audit - Server
+        run: |
+          cd server
+          npm install --package-lock-only || true
+          npm audit --json > ../npm-audit-server.json || true
+          echo "Server audit complete"
+
+      - name: Trivy - Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+        continue-on-error: true
+
+      - name: Trivy - SARIF output
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+        continue-on-error: true
+
+      - name: Upload dependency scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-scan-results
+          path: |
+            npm-audit-root.json
+            npm-audit-server.json
+            trivy-results.json
+
+  api-security-check:
+    name: API Security Check - Static Analysis
+    runs-on: ubuntu-latest
+    needs: detect-stack
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run API Security Analyzer
+        run: |
+          node - << 'SCRIPT'
+          const fs = require('fs');
+          const path = require('path');
+
+          const findings = [];
+
+          function scanFile(filePath, content) {
+            const lines = content.split('\n');
+
+            // Check for hardcoded secrets
+            const secretPatterns = [
+              { regex: /(?:secret|password|key|token|api_key)\s*[:=]\s*["'][^"']{8,}["']/gi, type: 'Hardcoded Secret' },
+              { regex: /AIzaSy[A-Za-z0-9_-]{33}/g, type: 'Google API Key' },
+              { regex: /sk-or-v1-[a-f0-9]{60}/g, type: 'OpenRouter API Key' },
+              { regex: /-----BEGIN (RSA |EC )?PRIVATE KEY-----/g, type: 'Private Key' },
+              { regex: /jwt\.sign\([^)]+,\s*["'][^"']+["']/g, type: 'Hardcoded JWT Secret' },
+            ];
+
+            // Check for missing auth
+            const authPatterns = [
+              { regex: /app\.(get|post|put|delete|patch)\s*\(\s*["']\/api\/admin/g, type: 'Admin Route' },
+            ];
+
+            // Check for dangerous operations
+            const dangerPatterns = [
+              { regex: /exec\s*\(\s*`[^`]*\$\{/g, type: 'Command Injection Risk' },
+              { regex: /cors\s*\(\s*\{\s*origin\s*:\s*["']\*["']/g, type: 'Wildcard CORS' },
+              { regex: /console\.(log|error)\s*\([^)]*(?:password|secret|key|token)/gi, type: 'Sensitive Data Logging' },
+            ];
+
+            [...secretPatterns, ...authPatterns, ...dangerPatterns].forEach(p => {
+              const matches = [...content.matchAll(p.regex)];
+              matches.forEach(m => {
+                const lineNum = content.substring(0, m.index).split('\n').length;
+                findings.push({
+                  file: filePath,
+                  line: lineNum,
+                  type: p.type,
+                  match: m[0].substring(0, 80)
+                });
+              });
+            });
+          }
+
+          // Scan server files
+          const serverDir = './server';
+          if (fs.existsSync(serverDir)) {
+            fs.readdirSync(serverDir).forEach(f => {
+              if (f.endsWith('.js') || f.endsWith('.ts')) {
+                const fp = path.join(serverDir, f);
+                scanFile(fp, fs.readFileSync(fp, 'utf8'));
+              }
+            });
+          }
+
+          console.log('\n=== API Security Static Analysis Results ===\n');
+          if (findings.length === 0) {
+            console.log('No issues found.');
+          } else {
+            findings.forEach(f => {
+              console.log(`[${f.type}] ${f.file}:${f.line}`);
+              console.log(`  Match: ${f.match}`);
+              console.log('');
+            });
+          }
+
+          fs.writeFileSync('api-security-findings.json', JSON.stringify(findings, null, 2));
+          console.log(`\nTotal findings: ${findings.length}`);
+          SCRIPT
+
+      - name: Upload API security findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-security-findings
+          path: api-security-findings.json
+
+  generate-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [sast-semgrep, secret-scan-gitleaks, dependency-scan, api-security-check]
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: scan-results
+        continue-on-error: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate consolidated report
+        run: |
+          node - << 'SCRIPT'
+          const fs = require('fs');
+
+          let report = `# Security Scan Report\n\n`;
+          report += `**Run Date:** ${new Date().toISOString()}\n`;
+          report += `**Repository:** ${{ github.repository }}\n`;
+          report += `**Branch:** ${{ github.ref_name }}\n`;
+          report += `**Commit:** ${{ github.sha }}\n\n---\n\n`;
+
+          // NPM Audit Summary
+          try {
+            const auditData = JSON.parse(fs.readFileSync('scan-results/dependency-scan-results/npm-audit-root.json', 'utf8'));
+            const meta = auditData.metadata?.vulnerabilities || {};
+            report += `## NPM Audit Results\n\n`;
+            report += `| Severity | Count |\n|---|---|\n`;
+            ['critical','high','moderate','low'].forEach(s => {
+              report += `| ${s.charAt(0).toUpperCase()+s.slice(1)} | ${meta[s]||0} |\n`;
+            });
+            report += `\n`;
+          } catch(e) { report += `## NPM Audit\n_Results not available_\n\n`; }
+
+          // API Security
+          try {
+            const apiFindings = JSON.parse(fs.readFileSync('scan-results/api-security-findings/api-security-findings.json', 'utf8'));
+            report += `## API Static Analysis\n\n`;
+            report += `Total findings: **${apiFindings.length}**\n\n`;
+            apiFindings.forEach(f => {
+              report += `- **[${f.type}]** ${f.file}:${f.line} — \`${f.match.substring(0,60)}\`\n`;
+            });
+            report += `\n`;
+          } catch(e) { report += `## API Security\n_Results not available_\n\n`; }
+
+          report += `\n---\n_Generated by AI Digital Tutor Security Workflow_\n`;
+
+          fs.writeFileSync('security-scan-report.md', report);
+          console.log('Report generated successfully');
+          SCRIPT
+
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-scan-report.md
+
+      - name: Publish GitHub Step Summary
+        run: |
+          cat security-scan-report.md >> $GITHUB_STEP_SUMMARY
+
+  critical-gate:
+    name: Critical Vulnerability Gate
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, sast-semgrep]
+    if: always()
+    steps:
+      - name: Download dependency results
+        uses: actions/download-artifact@v4
+        with:
+          name: dependency-scan-results
+          path: scan-results
+        continue-on-error: true
+
+      - name: Check for critical vulnerabilities
+        run: |
+          node - << 'SCRIPT'
+          const fs = require('fs');
+          try {
+            const data = JSON.parse(fs.readFileSync('scan-results/npm-audit-root.json', 'utf8'));
+            const critical = data.metadata?.vulnerabilities?.critical || 0;
+            console.log(`Critical vulnerabilities found: ${critical}`);
+            if (critical > 0) {
+              console.error(`FAILED: ${critical} critical vulnerabilities detected!`);
+              console.error('Fix critical issues before merging.');
+              process.exit(1);
+            }
+            console.log('PASSED: No critical vulnerabilities in root package.');
+          } catch(e) {
+            console.log('Could not read audit results — check scan job.');
+          }
+          SCRIPT

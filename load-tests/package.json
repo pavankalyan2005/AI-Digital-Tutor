@@ -1,0 +1,14 @@
+{
+  "name": "load-tests",
+  "version": "1.0.0",
+  "description": "Baseline Load Testing Suite for AI Digital Tutor Backend API",
+  "main": "run-load-test.js",
+  "type": "module",
+  "scripts": {
+    "test:load": "node run-load-test.js"
+  },
+  "dependencies": {
+    "autocannon": "^8.0.0",
+    "exceljs": "^4.4.0"
+  }
+}

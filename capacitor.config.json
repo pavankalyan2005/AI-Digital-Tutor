@@ -1,0 +1,10 @@
+{
+  "appId": "com.aidigitaltutor.app",
+  "appName": "AI Digital Tutor",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": ["*", "youtube.com", "www.youtube.com", "*.youtube.com"]
+  }
+}
