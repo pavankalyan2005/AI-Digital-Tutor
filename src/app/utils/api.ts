@@ -15,7 +15,7 @@ export const getBaseUrl = () => {
     const customUrl = localStorage.getItem("custom_api_url");
     if (customUrl && customUrl.trim() !== "") {
       const trimmed = customUrl.trim();
-      if (trimmed.includes("10.133.130.36")) {
+      if (trimmed.includes("10.133.130.36") || trimmed.includes("10.66.191.36")) {
         localStorage.removeItem("custom_api_url");
       } else {
         return trimmed;
@@ -24,14 +24,14 @@ export const getBaseUrl = () => {
   }
 
   const envUrl = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (envUrl && envUrl !== "" && !envUrl.includes("10.133.130.36")) {
+  if (envUrl && envUrl !== "" && !envUrl.includes("10.133.130.36") && !envUrl.includes("10.66.191.36")) {
     return envUrl;
   }
 
   const isNative = typeof window !== "undefined" && (Capacitor.isNativePlatform() || !!(window as any).Capacitor?.isNativePlatform());
 
   if (isNative) {
-    return "http://10.66.191.36:5000";
+    return "http://172.23.27.70:5000";
   }
 
   // Web Browser fallback
