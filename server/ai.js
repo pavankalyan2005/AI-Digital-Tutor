@@ -4,7 +4,7 @@ dotenv.config();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "google/gemma-4-26b-a4b-it:free";
 
 // In-memory LRU response cache for lightning-fast repeated queries
 const responseCache = new Map();
@@ -48,7 +48,7 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
   messages.push({ role: "user", content: prompt });
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -62,7 +62,7 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
         messages: messages,
-        max_tokens: 800,
+        max_tokens: 1200,
         temperature: 0.7
       }),
       signal: controller.signal
@@ -84,7 +84,7 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === "AbortError") {
-      throw new Error("OpenRouter request timed out after 3000ms.");
+      throw new Error("OpenRouter request timed out after 8000ms.");
     }
     throw err;
   }
@@ -105,7 +105,7 @@ async function queryGemini(prompt, systemInstruction = "") {
 
   for (const model of models) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 
     const body = {
@@ -117,9 +117,9 @@ async function queryGemini(prompt, systemInstruction = "") {
         }
       ],
       generationConfig: {
-        maxOutputTokens: 600,
+        maxOutputTokens: 1200,
         temperature: 0.7,
-        topP: 0.9
+        topP: 0.95
       }
     };
 
@@ -147,8 +147,8 @@ async function queryGemini(prompt, systemInstruction = "") {
         console.warn(`[AI] ${model} returned ${response.status}: ${errorText.substring(0, 100)}`);
         lastError = new Error(`Gemini API (${model} - ${response.status})`);
         
-        // If quota/rate-limited (429), break immediately to avoid waiting through all models
-        if (response.status === 429) {
+        // If quota/rate-limited (429) or invalid key (403), break immediately to proceed to OpenRouter
+        if (response.status === 429 || response.status === 403) {
           break;
         }
         continue;
@@ -157,7 +157,7 @@ async function queryGemini(prompt, systemInstruction = "") {
       const data = await response.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (text && text.trim()) {
-        console.log(`[AI] Sub-second response generated via ${model}`);
+        console.log(`[AI] Response generated successfully via ${model}`);
         return text;
       }
     } catch (err) {
@@ -275,6 +275,99 @@ function DataFetcher() {
     });
   }
 
+  // Algorithm and Specific Code Requests Fallback
+  if (lowerPrompt.includes("two sum") || lowerPrompt.includes("twosum")) {
+    return `### Two Sum Solution in Python 🐍
+
+The **Two Sum** problem asks us to find the indices of two numbers in an array that add up to a specific target.
+
+#### Optimal Hash Map Solution — O(n) Time Complexity:
+\`\`\`python
+def twoSum(nums, target):
+    seen = {}  # Map number -> index
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in seen:
+            return [seen[complement], i]
+        seen[num] = i
+    return []
+
+# Example Usage:
+nums = [2, 7, 11, 15]
+target = 9
+result = twoSum(nums, target)
+print("Indices:", result)  # Output: [0, 1]
+\`\`\`
+
+#### Explanation:
+1. We iterate through \`nums\` once while maintaining a hash map (\`seen\`).
+2. For each element, we check if its complement (\`target - num\`) already exists in our hash map.
+3. If it exists, we immediately return the stored index and the current index.
+4. Otherwise, we add the current number and index to \`seen\`.
+
+* **Time Complexity**: $\\mathcal{O}(n)$
+* **Space Complexity**: $\\mathcal{O}(n)$`;
+  }
+
+  if (lowerPrompt.includes("binary search")) {
+    return `### Binary Search in Python 🔍
+
+Binary search operates on a sorted array by repeatedly dividing the search interval in half.
+
+\`\`\`python
+def binary_search(arr, target):
+    left, right = 0, len(arr) - 1
+    while left <= right:
+        mid = (left + right) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return -1
+
+# Example
+numbers = [1, 3, 5, 7, 9, 11]
+print("Index of 7:", binary_search(numbers, 7))  # Output: 3
+\`\`\`
+* **Time Complexity**: $\\mathcal{O}(\\log n)$ | **Space Complexity**: $\\mathcal{O}(1)$`;
+  }
+
+  if (lowerPrompt.includes("fibonacci")) {
+    return `### Fibonacci Sequence in Python 🔢
+
+\`\`\`python
+def fibonacci(n):
+    if n <= 0: return 0
+    if n == 1: return 1
+    a, b = 0, 1
+    for _ in range(2, n + 1):
+        a, b = b, a + b
+    return b
+
+# Print first 10 Fibonacci numbers
+print([fibonacci(i) for i in range(10)])
+\`\`\`
+* **Time Complexity**: $\\mathcal{O}(n)$ | **Space Complexity**: $\\mathcal{O}(1)$`;
+  }
+
+  if (lowerPrompt.includes("factorial")) {
+    return `### Factorial Calculation in Python ⚡
+
+\`\`\`python
+def factorial(n):
+    if n < 0: raise ValueError("Factorial not defined for negative numbers.")
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return result
+
+print("5! =", factorial(5))  # Output: 120
+\`\`\`
+* **Time Complexity**: $\\mathcal{O}(n)$ | **Space Complexity**: $\\mathcal{O}(1)$`;
+  }
+
   // General Chat Fallback
   if (lowerPrompt.includes("machine learning") || lowerPrompt.includes("ml")) {
     return `### Machine Learning & AI Essentials 🧠
@@ -292,20 +385,6 @@ Machine Learning is a major discipline of Artificial Intelligence focused on tra
 - Experiment with beginner libraries: **Scikit-learn**, **Pandas**, **NumPy**.
 
 *Suggested Follow-up: Ask me to "Show me ML project ideas" or "What math do I need for ML?"*`;
-  }
-
-  if (lowerPrompt.includes("python") || lowerPrompt.includes("coding")) {
-    return `### Python Learning Blueprint 🐍
-
-Python is a versatile, high-level, highly readable language. It's the standard for Data Science, AI, and scripting.
-
-#### Roadmap to Python Mastery:
-1.  **Basics**: Variables, types (strings, lists, dicts), conditionals, loops, functions.
-2.  **Object-Oriented Programming (OOP)**: Designing structured systems with Classes, Methods, Inheritances.
-3.  **Packages**: Using pip to install third-party libraries (e.g. \`requests\` for APIs, \`pandas\` for data).
-4.  **Practice**: Solve problems inside the Coding Arena daily!
-
-*Suggested Follow-up: Ask me for "Python project ideas for portfolio" or "Common Python interview questions".*`;
   }
 
   if (lowerPrompt.includes("roadmap") || lowerPrompt.includes("full stack")) {
@@ -334,11 +413,11 @@ Becoming a Full Stack developer requires structured progression across multiple 
   return `### Hello! I am your AI Digital Tutor 🌟
 
 I am configured and running inside your local Node.js + SQLite backend! I can help you with:
-*   💻 **Programming & Coding**: Sandbox execution, refactoring suggestions, diagnostic errors.
+*   💻 **Programming & Coding**: Sandbox execution, algorithm solutions, refactoring suggestions.
 *   📚 **Learning Path Design**: Dynamic curricula, roadmaps, course walkthroughs.
 *   🎯 **Interview Prep**: Live simulated mock interviews and resume reviews.
 
-Tell me, what specific technology or skill would you like to build today?`;
+Tell me, what specific technology or problem would you like to solve today?`;
 }
 
 /**
@@ -349,10 +428,9 @@ export async function getTutorChatResponse(prompt, history = []) {
     try {
       const systemInstruction = `
         You are "AI Digital Tutor", a premium, friendly, and highly intelligent AI learning assistant.
-        You explain complex software, math, and technical concepts clearly and step-by-step.
+        When asked for code (e.g. "add two sum code in python"), provide the EXACT code solution directly with explanations.
         Always format your responses beautifully in markdown with code snippets, headers, and bullet points.
         Maintain a highly supportive, motivating, and professional tone.
-        Keep answers concise and direct for fast response delivery.
       `;
       // Slice history to the last 4 messages for rapid processing
       const recentHistory = (history || []).slice(-4);
@@ -363,15 +441,15 @@ export async function getTutorChatResponse(prompt, history = []) {
         New user message: ${prompt}
       `;
 
-      // Guarantee maximum 2.5s response time using Promise.race
+      // Allow up to 12.0s response window for full live API generation
       const onlinePromise = queryAI(contextPrompt, systemInstruction);
       const timeoutCap = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI online query race timeout")), 2500)
+        setTimeout(() => reject(new Error("AI online query race timeout")), 12000)
       );
 
       return await Promise.race([onlinePromise, timeoutCap]);
     } catch (err) {
-      console.warn("AI Chat fast fallback engaged:", err.message);
+      console.warn("AI Chat fallback engaged:", err.message);
       return getOfflineFallbackResponse(prompt, "chat");
     }
   } else {
