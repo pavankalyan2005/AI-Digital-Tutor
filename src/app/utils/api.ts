@@ -103,6 +103,9 @@ export const api = {
       if (err.name === "AbortError") {
         throw new Error(`Connection timed out after ${timeoutMs}ms.`);
       }
+      if (err.message === "Failed to fetch" || err.name === "TypeError") {
+        throw new Error(`Cannot connect to backend at ${currentBaseUrl}. Ensure server is running.`);
+      }
       throw err;
     }
   },
@@ -125,6 +128,9 @@ export const api = {
       clearTimeout(timeoutId);
       if (err.name === "AbortError") {
         throw new Error(`Connection timed out after ${timeoutMs}ms.`);
+      }
+      if (err.message === "Failed to fetch" || err.name === "TypeError") {
+        throw new Error(`Cannot connect to backend at ${currentBaseUrl}. Ensure server is running.`);
       }
       throw err;
     }
