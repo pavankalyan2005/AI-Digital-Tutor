@@ -62,26 +62,88 @@ if (!JWT_SECRET) {
 }
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "24h";
 
+const API_LIMITS = {
+  MAX_PROMPT_LENGTH: 3000,
+  MAX_TOPIC_LENGTH: 600,
+  MAX_CODE_LENGTH: 25000,
+  MAX_DEBUG_CODE_LENGTH: 12000,
+  MAX_DEBUG_ERROR_LENGTH: 2000,
+  MAX_HISTORY_ITEMS: 20,
+  MAX_HISTORY_ITEM_LENGTH: 2000,
+  ALLOWED_CODE_LANGUAGES: new Set(["javascript", "python", "java", "cpp", "c"])
+};
+
+function isSafeString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function ensureString(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+function validateMaxLength(value, fieldName, maxLength) {
+  if (!isSafeString(value)) return `${fieldName} is required.`;
+  if (value.length > maxLength) return `${fieldName} must be ${maxLength} characters or fewer.`;
+  return null;
+}
+
+function validateCodeLanguage(language) {
+  const normalized = ensureString(language).trim().toLowerCase();
+  if (!normalized) return { valid: false, message: 'Language is required.' };
+  if (!API_LIMITS.ALLOWED_CODE_LANGUAGES.has(normalized)) {
+    return { valid: false, message: `Unsupported language. Supported languages are: ${Array.from(API_LIMITS.ALLOWED_CODE_LANGUAGES).join(', ')}.` };
+  }
+  return { valid: true, language: normalized };
+}
+
+class ApiError extends Error {
+  constructor(message, status = 500) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+function safeRouteParam(value) {
+  if (!isSafeString(value)) return null;
+  const sanitized = value.trim();
+  if (sanitized.length > 100) return null;
+  return sanitized;
+}
+
 // Middlewares
 // Security headers (Helmet must come first, before any routes)
 app.use(helmet({
   contentSecurityPolicy: false // Disable strict CSP to allow embeds (YouTube, etc.)
 }));
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  process.env.FRONTEND_URL
-].filter(Boolean);
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, server-to-server)
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS policy: origin not allowed"));
+    // Allow requests with no origin (mobile native apps, curl, postman)
+    if (!origin) return callback(null, true);
+
+    // Allow any localhost / 127.0.0.1 dev port, local LAN IP, or FRONTEND_URL
+    const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+    const isLocalNetwork = /^http:\/\/(192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/i.test(origin);
+    const isConfiguredFrontend = process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL;
+
+    if (isLocalhost || isLocalNetwork || isConfiguredFrontend) {
+      return callback(null, true);
+    }
+    return callback(new Error(`CORS policy: origin ${origin} not allowed`));
   },
   credentials: true
 }));
-app.use(express.json({ limit: '1mb' })); // Limit payload size
+app.use(express.json({ limit: '384kb' })); // Limit JSON payload size
+app.use(express.urlencoded({ extended: false, limit: '100kb' }));
+
+// Handle oversized request payloads gracefully before the generic error handler
+app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Payload too large. Reduce request size and try again.' });
+  }
+  next(err);
+});
 
 // Simple request logger
 app.use((req, res, next) => {
@@ -1036,14 +1098,20 @@ app.get("/api/quizzes/history", authenticateToken, async (req, res, next) => {
 app.post("/api/quizzes/generate-ai", authenticateToken, async (req, res, next) => {
   try {
     const { topic, skill } = req.body;
-    if (!topic) {
-      return res.status(400).json({ error: "Topic is required to generate AI quiz." });
+    const topicError = validateMaxLength(topic, "Topic", API_LIMITS.MAX_TOPIC_LENGTH);
+    if (topicError) {
+      return res.status(400).json({ error: topicError });
     }
 
-    const aiQuestions = await generateAIQuizResponse(topic, skill);
+    const skillError = skill ? validateMaxLength(skill, "Skill", API_LIMITS.MAX_TOPIC_LENGTH) : null;
+    if (skillError) {
+      return res.status(400).json({ error: skillError });
+    }
+
+    const aiQuestions = await generateAIQuizResponse(topic.trim(), skill?.trim());
     res.json({
-      topic,
-      skill: skill || topic,
+      topic: topic.trim(),
+      skill: (skill || topic).trim(),
       questions: aiQuestions
     });
   } catch (err) {
@@ -1058,7 +1126,10 @@ app.post("/api/quizzes/generate-ai", authenticateToken, async (req, res, next) =
 // Get Curated Skill Reference Notes & Docs Links
 app.get("/api/notes/reference/:skill", authenticateToken, async (req, res, next) => {
   try {
-    const { skill } = req.params;
+    const skill = safeRouteParam(req.params.skill);
+    if (!skill) {
+      return res.status(400).json({ error: "Invalid skill parameter." });
+    }
     const notesMarkdown = getCuratedSkillNotes(skill);
     res.json({
       skill,
@@ -1073,13 +1144,14 @@ app.get("/api/notes/reference/:skill", authenticateToken, async (req, res, next)
 app.post("/api/ai/notes", authenticateToken, async (req, res, next) => {
   try {
     const { topic } = req.body;
-    if (!topic) {
-      return res.status(400).json({ error: "Topic is required to generate study notes." });
+    const topicError = validateMaxLength(topic, "Topic", API_LIMITS.MAX_TOPIC_LENGTH);
+    if (topicError) {
+      return res.status(400).json({ error: topicError });
     }
 
-    const notesMarkdown = await getNotesResponse(topic);
+    const notesMarkdown = await getNotesResponse(topic.trim());
     res.json({
-      topic,
+      topic: topic.trim(),
       notes: notesMarkdown
     });
   } catch (err) {
@@ -1543,13 +1615,21 @@ app.get("/api/code/challenges", async (req, res, next) => {
 });
 
 app.post("/api/code/execute", authenticateToken, codeExecuteLimiter, async (req, res, next) => {
-  const { language, code, stdin } = req.body;
-  if (!language || !code) {
-    return res.status(400).json({ error: "Language and code are required." });
-  }
-
   try {
-    const result = await executeCode(language, code, stdin);
+    const { language, code, stdin } = req.body;
+    const languageResult = validateCodeLanguage(language);
+    if (!languageResult.valid) {
+      return res.status(400).json({ error: languageResult.message });
+    }
+
+    if (!isSafeString(code)) {
+      return res.status(400).json({ error: "Code is required." });
+    }
+    if (code.length > API_LIMITS.MAX_CODE_LENGTH) {
+      return res.status(400).json({ error: `Code must be ${API_LIMITS.MAX_CODE_LENGTH} characters or fewer.` });
+    }
+
+    const result = await executeCode(languageResult.language, code, ensureString(stdin));
     res.json(result);
   } catch (err) {
     next(err);
@@ -1557,48 +1637,84 @@ app.post("/api/code/execute", authenticateToken, codeExecuteLimiter, async (req,
 });
 
 app.post("/api/code/run", authenticateToken, codeExecuteLimiter, async (req, res, next) => {
-  const { challengeId, code, language } = req.body;
-  if (!challengeId || !code || !language) {
-    return res.status(400).json({ error: "Challenge ID, code, and language are required." });
-  }
-
   try {
-    const result = await validateSubmission(req.user.userId, challengeId, code, language);
+    const { challengeId, code, language } = req.body;
+    if (!isSafeString(challengeId)) {
+      return res.status(400).json({ error: "Challenge ID is required." });
+    }
+
+    const languageResult = validateCodeLanguage(language);
+    if (!languageResult.valid) {
+      return res.status(400).json({ error: languageResult.message });
+    }
+
+    if (!isSafeString(code)) {
+      return res.status(400).json({ error: "Code is required." });
+    }
+    if (code.length > API_LIMITS.MAX_CODE_LENGTH) {
+      return res.status(400).json({ error: `Code must be ${API_LIMITS.MAX_CODE_LENGTH} characters or fewer.` });
+    }
+
+    const result = await validateSubmission(req.user.userId, challengeId.trim(), code, languageResult.language);
     res.json(result);
   } catch (err) {
+    if (err.status === 404) {
+      return res.status(404).json({ error: err.message });
+    }
     next(err);
   }
 });
 
 // AI Tutor
 app.post("/api/ai/chat", authenticateToken, async (req, res, next) => {
-  const { prompt, history } = req.body;
-  if (!prompt) return res.status(400).json({ error: "Prompt is required." });
-
-  let reply;
   try {
-    reply = await getTutorChatResponse(prompt, history || []);
-  } catch (aiErr) {
-    console.error("Gemini API Error:", aiErr);
-    return res.status(503).json({ error: "AI Tutor is currently unavailable. Please try again later.", details: aiErr.message });
-  }
+    const { prompt, history } = req.body;
+    const promptError = validateMaxLength(prompt, "Prompt", API_LIMITS.MAX_PROMPT_LENGTH);
+    if (promptError) {
+      return res.status(400).json({ error: promptError });
+    }
 
-  try {
-    const existingChat = await dbGet("SELECT id, message_history FROM ai_chats WHERE user_id = ? AND type = 'tutor'", [req.user.userId]);
-    let chatHistory = [];
-    if (existingChat) chatHistory = JSON.parse(existingChat.message_history);
-    chatHistory.push({ role: "user", content: prompt }, { role: "ai", content: reply });
-    if (existingChat) await dbRun("UPDATE ai_chats SET message_history = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [JSON.stringify(chatHistory), existingChat.id]);
-    else await dbRun("INSERT INTO ai_chats (user_id, type, message_history) VALUES (?, 'tutor', ?)", [req.user.userId, JSON.stringify(chatHistory)]);
+    const messageHistory = Array.isArray(history) ? history.slice(-API_LIMITS.MAX_HISTORY_ITEMS) : [];
+    const reply = await getTutorChatResponse(prompt.trim(), messageHistory);
+
+    try {
+      const existingChat = await dbGet("SELECT id, message_history FROM ai_chats WHERE user_id = ? AND type = 'tutor'", [req.user.userId]);
+      let chatHistory = [];
+      if (existingChat) chatHistory = JSON.parse(existingChat.message_history);
+      chatHistory.push({ role: "user", content: prompt.trim() }, { role: "ai", content: reply });
+      if (existingChat) await dbRun("UPDATE ai_chats SET message_history = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [JSON.stringify(chatHistory), existingChat.id]);
+      else await dbRun("INSERT INTO ai_chats (user_id, type, message_history) VALUES (?, 'tutor', ?)", [req.user.userId, JSON.stringify(chatHistory)]);
+    } catch (err) {
+      console.warn("AI chat history storage failed:", err.message);
+    }
+
     res.json({ reply });
   } catch (err) {
-    next(err);
+    console.error("AI Tutor Error:", err);
+    if (err instanceof ApiError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    res.status(503).json({ error: "AI Tutor is currently unavailable. Please try again later.", details: err.message });
   }
 });
 
 app.post("/api/ai/debug", authenticateToken, async (req, res, next) => {
   try {
-    const analysis = await getDebuggerResponse(req.body.code || "", req.body.error || "");
+    const { code, error } = req.body;
+    if (!isSafeString(code)) {
+      return res.status(400).json({ error: "Code snippet is required." });
+    }
+    if (!isSafeString(error)) {
+      return res.status(400).json({ error: "Compiler/runtime error description is required." });
+    }
+    if (code.length > API_LIMITS.MAX_DEBUG_CODE_LENGTH) {
+      return res.status(400).json({ error: `Code must be ${API_LIMITS.MAX_DEBUG_CODE_LENGTH} characters or fewer.` });
+    }
+    if (error.length > API_LIMITS.MAX_DEBUG_ERROR_LENGTH) {
+      return res.status(400).json({ error: `Error text must be ${API_LIMITS.MAX_DEBUG_ERROR_LENGTH} characters or fewer.` });
+    }
+
+    const analysis = await getDebuggerResponse(code.trim(), error.trim());
     res.json({ analysis });
   } catch (err) {
     console.error("Gemini API Error (Debug):", err);
@@ -1606,19 +1722,19 @@ app.post("/api/ai/debug", authenticateToken, async (req, res, next) => {
   }
 });
 
-app.post("/api/ai/notes", authenticateToken, async (req, res, next) => {
-  try {
-    const notes = await getNotesResponse(req.body.topic || "");
-    res.json({ notes });
-  } catch (err) {
-    console.error("Gemini API Error (Notes):", err);
-    res.status(503).json({ error: "AI Note Generator failed.", details: err.message });
-  }
-});
-
 app.post("/api/ai/interview", authenticateToken, async (req, res, next) => {
   try {
-    const interviewPayload = await getMockInterviewResponse(req.body.chatHistory || [], req.body.nextTurnPrompt || "");
+    const { chatHistory, nextTurnPrompt } = req.body;
+    if (!isSafeString(nextTurnPrompt)) {
+      return res.status(400).json({ error: "Next turn prompt is required." });
+    }
+
+    const history = Array.isArray(chatHistory) ? chatHistory.slice(-API_LIMITS.MAX_HISTORY_ITEMS) : [];
+    if (history.some(item => !item || typeof item !== 'object')) {
+      return res.status(400).json({ error: "Invalid chat history format." });
+    }
+
+    const interviewPayload = await getMockInterviewResponse(history, nextTurnPrompt.trim());
     res.json(interviewPayload);
   } catch (err) {
     console.error("Gemini API Error (Interview):", err);
