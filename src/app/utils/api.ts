@@ -71,17 +71,16 @@ async function handleResponse(response: Response) {
 const getFullUrl = (path: string) => {
   if (path.startsWith("http")) return path;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${currentBaseUrl}${normalizedPath}`;
+  return `${getBaseUrl()}${normalizedPath}`;
 };
 
 export const api = {
   get BASE_URL() {
-    return currentBaseUrl;
+    return getBaseUrl();
   },
   setBaseUrl: (newUrl: string) => {
     if (newUrl) {
       const formatted = newUrl.startsWith("http") ? newUrl : `http://${newUrl}`;
-      currentBaseUrl = formatted;
       localStorage.setItem("custom_api_url", formatted);
     }
   },
@@ -104,7 +103,7 @@ export const api = {
         throw new Error(`Connection timed out after ${timeoutMs}ms.`);
       }
       if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        throw new Error(`Cannot connect to backend at ${currentBaseUrl}. Ensure server is running.`);
+        throw new Error(`Cannot connect to backend at ${getBaseUrl()}. Ensure server is running.`);
       }
       throw err;
     }
@@ -130,7 +129,7 @@ export const api = {
         throw new Error(`Connection timed out after ${timeoutMs}ms.`);
       }
       if (err.message === "Failed to fetch" || err.name === "TypeError") {
-        throw new Error(`Cannot connect to backend at ${currentBaseUrl}. Ensure server is running.`);
+        throw new Error(`Cannot connect to backend at ${getBaseUrl()}. Ensure server is running.`);
       }
       throw err;
     }
