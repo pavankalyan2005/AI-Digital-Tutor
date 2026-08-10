@@ -1,4 +1,4 @@
-﻿name: Security Review
+name: Security Review
 
 on:
   push:
@@ -368,17 +368,26 @@ jobs:
         run: |
           node - << 'SCRIPT'
           const fs = require('fs');
-          try {
-            const data = JSON.parse(fs.readFileSync('scan-results/npm-audit-root.json', 'utf8'));
-            const critical = data.metadata?.vulnerabilities?.critical || 0;
-            console.log(`Critical vulnerabilities found: ${critical}`);
-            if (critical > 0) {
-              console.error(`FAILED: ${critical} critical vulnerabilities detected!`);
-              console.error('Fix critical issues before merging.');
-              process.exit(1);
+          let totalCritical = 0;
+          
+          ['scan-results/npm-audit-root.json', 'scan-results/npm-audit-server.json'].forEach(file => {
+            if (fs.existsSync(file)) {
+              try {
+                const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+                const critical = data.metadata?.vulnerabilities?.critical || 0;
+                console.log(`[${file}] Critical vulnerabilities found: ${critical}`);
+                totalCritical += critical;
+              } catch(e) {
+                console.log(`Could not parse ${file}`);
+              }
             }
-            console.log('PASSED: No critical vulnerabilities in root package.');
-          } catch(e) {
-            console.log('Could not read audit results — check scan job.');
+          });
+
+          console.log(`Total critical vulnerabilities found across all packages: ${totalCritical}`);
+          if (totalCritical > 0) {
+            console.error(`FAILED: ${totalCritical} critical vulnerabilities detected!`);
+            console.error('Fix critical issues before merging.');
+            process.exit(1);
           }
+          console.log('PASSED: No critical vulnerabilities detected.');
           SCRIPT

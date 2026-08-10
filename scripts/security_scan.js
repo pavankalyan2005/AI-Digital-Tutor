@@ -23,12 +23,24 @@ while ((m = routeRegex.exec(indexSrc))) {
   const pathStr = rawPath.replace(/^['\"]|['\"]$/g, '');
   const middleware = m[3] ? m[3].trim() : '';
   const authRequired = /authenticateToken/.test(m[0]) || /authenticateToken/.test(m[3] || '') || /authenticateToken/.test(indexSrc.slice(m.index - 200, m.index + 200));
-  endpoints.push({ endpoint: pathStr, method, authRequired, middleware: middleware.replace(/\n/g, ' ') });
+  const expectedRoles = /requireAdmin/.test(m[0]) || /requireAdmin/.test(m[3] || '') || /\/api\/admin\//.test(pathStr)
+    ? 'Admin'
+    : authRequired
+      ? 'Authenticated User'
+      : 'Public';
+  endpoints.push({
+    endpoint: pathStr,
+    method,
+    authRequired,
+    expectedRoles,
+    middleware: middleware.replace(/\n/g, ' '),
+    controllerPath: 'server/index.js'
+  });
 }
 
 // Write endpoint CSV
-const epCsv = ['Endpoint,Method,Authentication Required,Middleware\n'];
-for (const e of endpoints) epCsv.push(`"${e.endpoint}",${e.method},${e.authRequired},"${e.middleware}"\n`);
+const epCsv = ['Endpoint,Method,Authentication Required,Expected Roles,Middleware,Controller/File Path\n'];
+for (const e of endpoints) epCsv.push(`"${e.endpoint}",${e.method},${e.authRequired},"${e.expectedRoles}","${e.middleware}","${e.controllerPath}"\n`);
 fs.writeFileSync(path.join(outDir, 'endpoint-inventory.csv'), epCsv.join(''));
 
 // 2. Scan for hardcoded secrets (simple regexes)
