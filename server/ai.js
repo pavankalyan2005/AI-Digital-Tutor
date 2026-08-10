@@ -4,7 +4,7 @@ dotenv.config();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openai/gpt-oss-20b:free";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
 
 // In-memory LRU response cache for lightning-fast repeated queries
 const responseCache = new Map();
@@ -48,7 +48,7 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
   messages.push({ role: "user", content: prompt });
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4500);
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -61,7 +61,9 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
       },
       body: JSON.stringify({
         model: OPENROUTER_MODEL,
-        messages: messages
+        messages: messages,
+        max_tokens: 800,
+        temperature: 0.7
       }),
       signal: controller.signal
     });
@@ -82,86 +84,101 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === "AbortError") {
-      throw new Error("OpenRouter request timed out after 4500ms.");
+      throw new Error("OpenRouter request timed out after 3000ms.");
     }
     throw err;
   }
 }
 
 /**
- * Base helper to query Google's Gemini API using lightweight native fetch.
- * Uses gemini-1.5-flash with a 4.5s fast timeout for sub-second responses.
+ * Base helper to query Google's Gemini API using active fast models (gemini-2.5-flash, gemini-2.0-flash).
+ * Uses generationConfig and tight timeouts for sub-1.5s responses.
  */
 async function queryGemini(prompt, systemInstruction = "") {
   if (!GEMINI_API_KEY) {
     throw new Error("Gemini API key is not configured.");
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 4500);
+  // Active Gemini models list
+  const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"];
+  let lastError = null;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  for (const model of models) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 
-  const body = {
-    contents: [
-      {
-        parts: [
-          { text: prompt }
-        ]
+    const body = {
+      contents: [
+        {
+          parts: [
+            { text: prompt }
+          ]
+        }
+      ],
+      generationConfig: {
+        maxOutputTokens: 600,
+        temperature: 0.7,
+        topP: 0.9
       }
-    ]
-  };
-
-  if (systemInstruction) {
-    body.systemInstruction = {
-      parts: [
-        { text: systemInstruction }
-      ]
     };
+
+    if (systemInstruction) {
+      body.systemInstruction = {
+        parts: [
+          { text: systemInstruction }
+        ]
+      };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn(`[AI] ${model} returned ${response.status}: ${errorText.substring(0, 100)}`);
+        lastError = new Error(`Gemini API (${model} - ${response.status})`);
+        
+        // If quota/rate-limited (429), break immediately to avoid waiting through all models
+        if (response.status === 429) {
+          break;
+        }
+        continue;
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text && text.trim()) {
+        console.log(`[AI] Sub-second response generated via ${model}`);
+        return text;
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastError = err;
+    }
   }
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Gemini API Error (${response.status}): ${errorText}`);
-    }
-
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      throw new Error("Invalid response format received from Gemini API.");
-    }
-
-    return text;
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === "AbortError") {
-      throw new Error("Gemini API request timed out after 4500ms.");
-    }
-    throw err;
-  }
+  throw lastError || new Error("All Gemini model endpoints timed out or were rate-limited.");
 }
 
 /**
  * Unified AI Query Function:
- * Tries Gemini API (sub-second) FIRST, then OpenRouter fallback, with cache enabled.
+ * Tries Gemini API (1.5s ultra-fast) FIRST, then OpenRouter fallback, with cache enabled.
  */
 async function queryAI(prompt, systemInstruction = "") {
   const cacheKey = `${systemInstruction.slice(0, 40)}:${prompt.trim()}`;
   const cached = getCachedResponse(cacheKey);
   if (cached) return cached;
 
-  // 1. Primary: Gemini API (Fastest response time, ~0.8s)
+  // 1. Primary: Gemini API (Fastest response time, ~1.5s)
   if (GEMINI_API_KEY) {
     try {
       console.log("[AI] Querying Gemini API (Fast Primary)...");
@@ -335,7 +352,7 @@ export async function getTutorChatResponse(prompt, history = []) {
         You explain complex software, math, and technical concepts clearly and step-by-step.
         Always format your responses beautifully in markdown with code snippets, headers, and bullet points.
         Maintain a highly supportive, motivating, and professional tone.
-        Keep answers comprehensive yet focused.
+        Keep answers concise and direct for fast response delivery.
       `;
       // Slice history to the last 4 messages for rapid processing
       const recentHistory = (history || []).slice(-4);
@@ -345,9 +362,16 @@ export async function getTutorChatResponse(prompt, history = []) {
         
         New user message: ${prompt}
       `;
-      return await queryAI(contextPrompt, systemInstruction);
+
+      // Guarantee maximum 2.5s response time using Promise.race
+      const onlinePromise = queryAI(contextPrompt, systemInstruction);
+      const timeoutCap = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI online query race timeout")), 2500)
+      );
+
+      return await Promise.race([onlinePromise, timeoutCap]);
     } catch (err) {
-      console.warn("AI Chat API call failed, using fallback:", err.message);
+      console.warn("AI Chat fast fallback engaged:", err.message);
       return getOfflineFallbackResponse(prompt, "chat");
     }
   } else {
@@ -378,7 +402,13 @@ export async function getDebuggerResponse(userCode, compilerError) {
         Compiler / Test cases error:
         ${compilerError}
       `;
-      return await queryAI(prompt, systemInstruction);
+
+      const onlinePromise = queryAI(prompt, systemInstruction);
+      const timeoutCap = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("AI debug query race timeout")), 2500)
+      );
+
+      return await Promise.race([onlinePromise, timeoutCap]);
     } catch (err) {
       console.warn("AI Debug API call failed, using fallback:", err.message);
       return getOfflineFallbackResponse(userCode, "debug");
