@@ -21,7 +21,7 @@ export function SplashScreen() {
     setError(null);
 
     async function checkConnection() {
-      const maxRetries = 2;
+      const maxRetries = 3;
       let lastErr: any = null;
 
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -31,7 +31,7 @@ export function SplashScreen() {
 
         try {
           console.log(`SplashScreen: Fast API health check (attempt ${attempt}/${maxRetries})...`);
-          const health = await api.get("/api/health", { timeoutMs: 2000 });
+          const health = await api.get("/api/health", { timeoutMs: 5000 });
           console.log("SplashScreen: API is UP!", health);
 
           if (!isMounted) return;
@@ -44,7 +44,7 @@ export function SplashScreen() {
           lastErr = err;
           console.warn(`SplashScreen: Health check attempt ${attempt}/${maxRetries} failed`, err);
           if (attempt < maxRetries) {
-            await new Promise((resolve) => setTimeout(resolve, 300));
+            await new Promise((resolve) => setTimeout(resolve, 500));
           }
         }
       }
