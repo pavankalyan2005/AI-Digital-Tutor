@@ -5,33 +5,41 @@ import { Capacitor } from "@capacitor/core";
  * Connects frontend screens directly to Express backend endpoints.
  */
 
+const isLocalhostUrl = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  return normalized.includes("localhost") || normalized.includes("127.0.0.1") || normalized.includes("::1");
+};
+
 export const getBaseUrl = () => {
   if (typeof localStorage !== "undefined") {
     const customUrl = localStorage.getItem("custom_api_url");
     if (customUrl && customUrl.trim() !== "") {
-      if (customUrl.includes("10.133.130.36")) {
+      const trimmed = customUrl.trim();
+      if (trimmed.includes("10.133.130.36")) {
         localStorage.removeItem("custom_api_url");
       } else {
-        return customUrl.trim();
+        return trimmed;
       }
     }
+  }
+
+  const envUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+  if (envUrl && envUrl !== "" && !envUrl.includes("10.133.130.36")) {
+    return envUrl;
   }
 
   const isNative = typeof window !== "undefined" && (Capacitor.isNativePlatform() || !!(window as any).Capacitor?.isNativePlatform());
 
   if (isNative) {
-    const envUrl = import.meta.env.VITE_API_BASE_URL;
-    if (envUrl && envUrl.trim() !== "" && !envUrl.includes("localhost") && !envUrl.includes("127.0.0.1") && !envUrl.includes("10.133.130.36")) {
-      return envUrl.trim();
-    }
-    // Computer's current active Wi-Fi network IP
     return "http://10.66.191.36:5000";
   }
 
   // Web Browser fallback
-  if (typeof window !== "undefined" && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
-    const envUrl = import.meta.env.VITE_API_BASE_URL;
-    if (envUrl && envUrl.trim() !== "") return envUrl.trim();
+  if (typeof window !== "undefined") {
+    const hostname = window.location.hostname;
+    if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "") {
+      return `http://${hostname}:5000`;
+    }
   }
 
   return "http://localhost:5000";
