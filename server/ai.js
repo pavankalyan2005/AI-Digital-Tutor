@@ -4,7 +4,7 @@ dotenv.config();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "google/gemma-4-26b-a4b-it:free";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "nvidia/nemotron-3-nano-30b-a3b:free";
 
 // In-memory LRU response cache for lightning-fast repeated queries
 const responseCache = new Map();
