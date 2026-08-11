@@ -476,8 +476,9 @@ export function AITutorChat() {
                   </span>
                 </div>
               </motion.div>
-            ))}
-          </AnimatePresence>
+            );
+          })}
+        </AnimatePresence>
 
           {/* Typing Indicator */}
           {isTyping && (
