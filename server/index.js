@@ -1349,14 +1349,22 @@ app.get("/api/progress/skill-distribution", authenticateToken, async (req, res, 
       }
     }
 
-    // Get all enrolled courses with completion counts per skill/category
+    // Get all enrolled courses with weighted module progress incorporating watched_duration
     const rows = await dbAll(`
       SELECT 
         COALESCE(c.skill, c.category, c.title) as category,
         c.title as course_title,
         c.id as course_id,
         COUNT(DISTINCT m.id) as total,
-        COUNT(DISTINCT CASE WHEN up.completed = 1 THEN up.lesson_id END) as completed
+        COUNT(DISTINCT CASE WHEN up.completed = 1 THEN up.lesson_id END) as completed_count,
+        SUM(
+          CASE 
+            WHEN up.completed = 1 THEN 1.0
+            WHEN COALESCE(up.watched_duration, 0) > 0 THEN 
+              MIN(1.0, CAST(up.watched_duration AS FLOAT) / 600.0)
+            ELSE 0.0
+          END
+        ) as weighted_completed
       FROM enrollments e
       JOIN courses c ON e.course_id = c.id
       LEFT JOIN modules m ON m.course_id = c.id
@@ -1369,13 +1377,16 @@ app.get("/api/progress/skill-distribution", authenticateToken, async (req, res, 
 
     const result = rows.map((r, i) => {
       const skillName = r.category || r.course_title || "Python Programming";
-      const scoreVal = r.total > 0 ? Math.round((r.completed / r.total) * 100) : 0;
+      const weightedScore = (r.weighted_completed || 0);
+      const totalCount = r.total || 1;
+      const scoreVal = Math.min(100, Math.round((weightedScore / totalCount) * 100));
+
       return {
         skill: skillName,
         name: skillName,
         score: scoreVal,
         value: scoreVal,
-        completed: r.completed || 0,
+        completed: r.completed_count || 0,
         total: r.total || 0,
         course_id: r.course_id,
         color: colors[i % colors.length]

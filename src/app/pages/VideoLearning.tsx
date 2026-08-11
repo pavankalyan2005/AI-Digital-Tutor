@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router";
 import { motion, AnimatePresence } from "motion/react";
-import { Clock, Sparkles, CheckCircle, ChevronLeft, BrainCircuit, Notebook, FileText, AlertTriangle, ExternalLink } from "lucide-react";
+import { Clock, Sparkles, CheckCircle, ChevronLeft, BrainCircuit, Notebook, FileText, AlertTriangle, ExternalLink, Play } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
+import { Progress } from "../components/ui/progress";
 import { api } from "../utils/api";
 import { toast } from "sonner";
 import { useSessionTracker } from "../hooks/useSessionTracker";
@@ -17,6 +18,14 @@ interface ModuleData {
   video_url: string;
   video_duration: string;
   completed: number;
+  watchedDuration?: number;
+}
+
+declare global {
+  interface Window {
+    YT: any;
+    onYouTubeIframeAPIReady: any;
+  }
 }
 
 export function VideoLearning() {
@@ -28,6 +37,13 @@ export function VideoLearning() {
   const [aiNotes, setAiNotes] = useState("");
   const [isNotesGenerating, setIsNotesGenerating] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
+  const [watchedSec, setWatchedSec] = useState(0);
+  const [initialSeekDone, setInitialSeekDone] = useState(false);
+  const [showResumeBadge, setShowResumeBadge] = useState(false);
+
+  const playerRef = useRef<any>(null);
+  const iframeContainerRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<any>(null);
 
   useEffect(() => {
     async function loadModuleDetails() {
@@ -36,6 +52,11 @@ export function VideoLearning() {
       try {
         const data = await api.courses.getModuleById(moduleId);
         setModuleData(data);
+        const startSec = data.watchedDuration || 0;
+        setWatchedSec(startSec);
+        if (startSec > 5) {
+          setShowResumeBadge(true);
+        }
       } catch (err: any) {
         toast.error("Failed to load module video details.");
       } finally {
@@ -44,6 +65,113 @@ export function VideoLearning() {
     }
     loadModuleDetails();
   }, [moduleId]);
+
+  // Load YouTube IFrame API and initialize player
+  useEffect(() => {
+    if (!moduleData || !iframeContainerRef.current) return;
+
+    const extractVideoId = (url: string) => {
+      if (!url) return "";
+      const match = url.match(/(?:embed\/|v=|v\/|vi\/|youtu\.be\/|\/v\/|embed\?v=|\?v=)([^#&?]*)/);
+      return (match && match[1]?.length === 11) ? match[1] : url.split('/').pop()?.split('?')[0] || "";
+    };
+
+    const videoId = extractVideoId(moduleData.video_url);
+    if (!videoId) return;
+
+    const saveCurrentProgress = async (currentTime: number, duration: number) => {
+      if (!moduleId || currentTime <= 0) return;
+      try {
+        const isDone = duration > 0 && currentTime / duration >= 0.9;
+        await api.courses.updateProgress(moduleId, isDone, Math.floor(currentTime), Math.floor(duration));
+      } catch (e) {
+        console.warn("Failed to auto-save video progress:", e);
+      }
+    };
+
+    const initPlayer = () => {
+      if (!iframeContainerRef.current || playerRef.current) return;
+
+      playerRef.current = new window.YT.Player(iframeContainerRef.current, {
+        videoId: videoId,
+        playerVars: {
+          autoplay: 0,
+          modestbranding: 1,
+          rel: 0,
+          enablejsapi: 1
+        },
+        events: {
+          onReady: (event: any) => {
+            const startPos = moduleData.watchedDuration || 0;
+            if (startPos > 5) {
+              event.target.seekTo(startPos, true);
+              setInitialSeekDone(true);
+            }
+          },
+          onStateChange: (event: any) => {
+            // YT.PlayerState.PLAYING = 1
+            if (event.data === 1) {
+              if (intervalRef.current) clearInterval(intervalRef.current);
+              intervalRef.current = setInterval(() => {
+                if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                  const curr = playerRef.current.getCurrentTime() || 0;
+                  const dur = playerRef.current.getDuration() || 0;
+                  setWatchedSec(Math.floor(curr));
+                  saveCurrentProgress(curr, dur);
+                }
+              }, 5000);
+            } else {
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+              if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                const curr = playerRef.current.getCurrentTime() || 0;
+                const dur = playerRef.current.getDuration() || 0;
+                setWatchedSec(Math.floor(curr));
+                saveCurrentProgress(curr, dur);
+              }
+            }
+          }
+        }
+      });
+    };
+
+    if (window.YT && window.YT.Player) {
+      initPlayer();
+    } else {
+      if (!document.getElementById('youtube-iframe-api')) {
+        const tag = document.createElement('script');
+        tag.id = 'youtube-iframe-api';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.body.appendChild(tag);
+      }
+      window.onYouTubeIframeAPIReady = () => {
+        initPlayer();
+      };
+    }
+
+    const handleBeforeUnload = () => {
+      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+        const curr = playerRef.current.getCurrentTime() || 0;
+        const dur = playerRef.current.getDuration() || 0;
+        if (curr > 0) {
+          saveCurrentProgress(curr, dur);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        playerRef.current.destroy();
+        playerRef.current = null;
+      }
+    };
+  }, [moduleData, moduleId]);
 
   if (isLoading) {
     return (
@@ -84,9 +212,8 @@ export function VideoLearning() {
     if (!moduleId) return;
     setIsCompleting(true);
     try {
-      // For one-shot videos, we could pass totalDuration if we wanted auto-completion based on time,
-      // but for manual clicks, we just mark it done.
-      const res = await api.courses.updateProgress(moduleId, true, 100);
+      const res = await api.courses.updateProgress(moduleId, true, totalSec || 100, totalSec || 100);
+      setWatchedSec(totalSec);
       toast.success(`Module Completed! +${res.pointsAwarded} XP! 🔥`);
       navigate(-1);
     } catch (err: any) {
@@ -99,25 +226,33 @@ export function VideoLearning() {
   const formatDuration = (seconds: number) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
-    if (hrs > 0) return `${hrs}h ${mins}m`;
-    return `${mins}m`;
+    const secs = Math.floor(seconds % 60);
+    if (hrs > 0) return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const parseDurationToSeconds = (dur: string) => {
+    if (!dur) return 0;
     const parts = dur.split(':').map(Number);
     if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
     if (parts.length === 2) return parts[0] * 60 + parts[1];
-    return 0;
+    return Number(dur) || 0;
   };
 
-  const totalSec = parseDurationToSeconds(moduleData.video_duration);
-  const watchedSec = moduleData.watchedDuration || 0;
-  const progressPercent = totalSec > 0 ? (watchedSec / totalSec) * 100 : 0;
+  const totalSec = parseDurationToSeconds(moduleData.video_duration) || 600;
+  const progressPercent = totalSec > 0 ? Math.min(100, Math.round((watchedSec / totalSec) * 100)) : 0;
 
-  // Convert embed URL back to watch URL for the fallback link
   const getYouTubeWatchUrl = (embedUrl: string) => {
     const videoId = embedUrl.split('/').pop()?.split('?')[0];
     return `https://www.youtube.com/watch?v=${videoId}`;
+  };
+
+  const handleResumeClick = () => {
+    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+      playerRef.current.seekTo(watchedSec, true);
+      playerRef.current.playVideo();
+      setShowResumeBadge(false);
+    }
   };
 
   return (
@@ -134,19 +269,33 @@ export function VideoLearning() {
         <Badge className="bg-gradient-to-r from-primary to-accent border-0 uppercase">{moduleData.id.split('-').pop() === 'full' ? 'One Shot Course' : 'Module Lesson'}</Badge>
       </div>
 
+      {/* Resume Indicator Banner */}
+      {showResumeBadge && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-primary/15 border border-primary/40 rounded-2xl px-5 py-3 flex items-center justify-between shadow-md"
+        >
+          <div className="flex items-center gap-2.5 text-sm font-semibold text-primary">
+            <Play className="h-4 w-4 fill-current animate-pulse" />
+            <span>Saved Progress Found: Resuming from {formatDuration(watchedSec)}</span>
+          </div>
+          <Button
+            size="sm"
+            onClick={handleResumeClick}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold cursor-pointer"
+          >
+            ▶ Resume Playback
+          </Button>
+        </motion.div>
+      )}
+
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Left Side - Video Player & Meta */}
         <div className="lg:col-span-2 space-y-6">
           <Card className="border-border/50 bg-black overflow-hidden rounded-3xl shadow-2xl relative">
             <div className="aspect-video w-full">
-              <iframe
-                src={moduleData.video_url}
-                title={moduleData.title}
-                frameBorder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-                className="w-full h-full"
-              ></iframe>
+              <div ref={iframeContainerRef} className="w-full h-full" />
             </div>
             <div className="bg-black/80 px-4 py-3 text-[10px] text-white/50 flex justify-between items-center border-t border-white/5">
               <div className="flex items-center gap-4">
