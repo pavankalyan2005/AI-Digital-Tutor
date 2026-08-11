@@ -53,6 +53,7 @@ export function SplashScreen() {
       console.error("SplashScreen: API connection failed after retries", lastErr);
       const baseUrl = api.BASE_URL;
       setAttemptedUrl(`${baseUrl}/api/health`);
+      setCustomIp(baseUrl);
       setError("Unable to connect to backend server at " + baseUrl);
       toast.error("Connection Error: " + (lastErr?.message || "Failed to reach server"));
     }
