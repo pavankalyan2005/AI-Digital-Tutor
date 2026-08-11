@@ -196,6 +196,44 @@ export async function testGeminiHealth() {
 }
 
 /**
+ * Unified AI Health Check (Gemini or OpenRouter fallback)
+ */
+export async function testAIHealth() {
+  const geminiOk = await testGeminiHealth();
+  if (geminiOk) {
+    return { gemini: true, openrouter: false, active: true };
+  }
+
+  if (OPENROUTER_API_KEY) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          messages: [{ role: "user", content: "Ping" }],
+          max_tokens: 5
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        return { gemini: false, openrouter: true, active: true };
+      }
+    } catch (err) {
+      console.warn("[OpenRouter Health Check Notice]:", err.message);
+    }
+  }
+
+  return { gemini: false, openrouter: false, active: false };
+}
+
+/**
  * Unified AI Query Function:
  * Tries Gemini API (1.5s ultra-fast) FIRST, then OpenRouter fallback, with cache enabled.
  */

@@ -26,7 +26,8 @@ import {
   generateAIQuizResponse,
   getCuratedSkillNotes,
   generateCourseTopics,
-  testGeminiHealth
+  testGeminiHealth,
+  testAIHealth
 } from "./ai.js";
 
 dotenv.config();
@@ -162,10 +163,12 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/health", async (req, res) => {
-  const geminiWorking = await testGeminiHealth();
+  const aiHealth = await testAIHealth();
   res.json({
     status: "ok",
-    gemini: geminiWorking,
+    gemini: aiHealth.gemini,
+    openrouter: aiHealth.openrouter,
+    aiAvailable: aiHealth.active,
     time: new Date().toISOString()
   });
 });

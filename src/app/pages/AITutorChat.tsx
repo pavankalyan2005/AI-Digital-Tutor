@@ -71,10 +71,10 @@ export function AITutorChat() {
   useEffect(() => {
     api.get("/api/health")
       .then((res: any) => {
-        if (res && res.gemini === false) {
-          setIsGeminiOffline(true);
-        } else {
+        if (res && (res.aiAvailable === true || res.openrouter === true || res.gemini === true)) {
           setIsGeminiOffline(false);
+        } else {
+          setIsGeminiOffline(true);
         }
       })
       .catch(() => {
