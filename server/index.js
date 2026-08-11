@@ -25,7 +25,8 @@ import {
   getMockInterviewResponse,
   generateAIQuizResponse,
   getCuratedSkillNotes,
-  generateCourseTopics
+  generateCourseTopics,
+  testGeminiHealth
 } from "./ai.js";
 
 dotenv.config();
@@ -160,8 +161,13 @@ app.get("/", (req, res) => {
   });
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
+app.get("/api/health", async (req, res) => {
+  const geminiWorking = await testGeminiHealth();
+  res.json({
+    status: "ok",
+    gemini: geminiWorking,
+    time: new Date().toISOString()
+  });
 });
 
 // Rate limiter for code execution - cap abuse

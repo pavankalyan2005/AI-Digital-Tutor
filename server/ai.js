@@ -170,6 +170,32 @@ async function queryGemini(prompt, systemInstruction = "") {
 }
 
 /**
+ * Test Gemini API health for /api/health endpoint
+ */
+export async function testGeminiHealth() {
+  if (!GEMINI_API_KEY) return false;
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: "Ping" }] }],
+        generationConfig: { maxOutputTokens: 5 }
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch (err) {
+    console.warn("[Gemini Health Check Notice]:", err.message);
+    return false;
+  }
+}
+
+/**
  * Unified AI Query Function:
  * Tries Gemini API (1.5s ultra-fast) FIRST, then OpenRouter fallback, with cache enabled.
  */
@@ -188,6 +214,7 @@ async function queryAI(prompt, systemInstruction = "") {
         return res;
       }
     } catch (gErr) {
+      console.error("[AI Chat Error Detail - Gemini Failure]:", gErr);
       console.warn("[AI] Gemini error, trying OpenRouter fallback:", gErr.message);
     }
   }
@@ -202,6 +229,7 @@ async function queryAI(prompt, systemInstruction = "") {
         return res;
       }
     } catch (orErr) {
+      console.error("[AI Chat Error Detail - OpenRouter Failure]:", orErr);
       console.warn("[AI] OpenRouter fallback error:", orErr.message);
     }
   }
@@ -410,14 +438,11 @@ Becoming a Full Stack developer requires structured progression across multiple 
 *Suggested Follow-up: Ask me to "Create a detailed week-by-week plan" or "Recommend beginner projects".*`;
   }
 
-  return `### Hello! I am your AI Digital Tutor 🌟
+  return `### I'm currently offline ⚡
 
-I am configured and running inside your local Node.js + SQLite backend! I can help you with:
-*   💻 **Programming & Coding**: Sandbox execution, algorithm solutions, refactoring suggestions.
-*   📚 **Learning Path Design**: Dynamic curricula, roadmaps, course walkthroughs.
-*   🎯 **Interview Prep**: Live simulated mock interviews and resume reviews.
+You asked about: "${prompt.trim()}"
 
-Tell me, what specific technology or problem would you like to solve today?`;
+Please check your **GEMINI_API_KEY** in \`server/.env\` and verify your backend server network connection.`;
 }
 
 /**

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Send, Mic, MicOff, Paperclip, Sparkles, Code, BookOpen, Lightbulb, 
   Copy, ThumbsUp, ThumbsDown, Volume2, VolumeX, Square, Radio, 
-  Check, Settings, Gauge
+  Check, Settings, Gauge, AlertTriangle, RotateCcw
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -55,7 +55,32 @@ export function AITutorChat() {
     return saved ? (parseFloat(saved) as PlaybackRate) : 1.0;
   });
   const [isListening, setIsListening] = useState<boolean>(false);
-  const [showVoiceSettings, setShowVoiceSettings] = useState<boolean>(false);
+  const [isGeminiOffline, setIsGeminiOffline] = useState<boolean>(false);
+
+  const isFallbackResponse = (content: string) => {
+    if (!content) return false;
+    return (
+      content.startsWith("###") ||
+      content.includes("I am configured and running inside") ||
+      content.includes("I'm currently offline") ||
+      content.includes("check your GEMINI_API_KEY") ||
+      content.includes("Check your GEMINI_API_KEY")
+    );
+  };
+
+  useEffect(() => {
+    api.get("/api/health")
+      .then((res: any) => {
+        if (res && res.gemini === false) {
+          setIsGeminiOffline(true);
+        } else {
+          setIsGeminiOffline(false);
+        }
+      })
+      .catch(() => {
+        setIsGeminiOffline(true);
+      });
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -292,74 +317,127 @@ export function AITutorChat() {
         </div>
       </div>
 
+      {/* Persistent Gemini Offline Warning Banner */}
+      {isGeminiOffline && (
+        <div className="bg-amber-500/15 border-b border-amber-500/30 px-6 py-2.5 flex items-center justify-between text-xs text-amber-500 font-semibold shadow-inner">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500 animate-pulse shrink-0" />
+            <span>AI is in offline mode — check backend Gemini API key</span>
+          </div>
+          <Badge variant="outline" className="border-amber-500/40 text-amber-500 text-[10px] bg-amber-500/10">
+            Offline Mode
+          </Badge>
+        </div>
+      )}
+
       {/* Chat Messages */}
       <ScrollArea className="flex-1 p-6">
         <div className="max-w-4xl mx-auto space-y-6">
           <AnimatePresence>
-            {messages.map((message) => (
-              <motion.div
-                key={message.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className={`flex gap-4 ${message.type === "user" ? "flex-row-reverse" : ""}`}
-              >
-                {/* Avatar */}
-                <Avatar className={`h-10 w-10 ${message.type === "ai" ? "ring-2 ring-primary/20" : ""}`}>
-                  <AvatarFallback className={message.type === "ai" ? "bg-gradient-to-r from-primary to-accent text-primary-foreground" : ""}>
-                    {message.type === "ai" ? <Sparkles className="h-5 w-5" /> : "You"}
-                  </AvatarFallback>
-                </Avatar>
+            {messages.map((message) => {
+              const isFallback = message.type === "ai" && isFallbackResponse(message.content);
 
-                <div className={`flex-1 max-w-2xl ${message.type === "user" ? "flex justify-end" : ""}`}>
-                  <Card
-                    className={`p-4 ${
-                      message.type === "ai"
-                        ? "bg-card/80 backdrop-blur border-border/50 shadow-sm"
-                        : "bg-gradient-to-r from-primary to-accent text-primary-foreground border-0 shadow-md"
-                    }`}
-                  >
-                    <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+              return (
+                <motion.div
+                  key={message.id}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className={`flex gap-4 ${message.type === "user" ? "flex-row-reverse" : ""}`}
+                >
+                  {/* Avatar */}
+                  <Avatar className={`h-10 w-10 ${message.type === "ai" ? "ring-2 ring-primary/20" : ""}`}>
+                    <AvatarFallback className={message.type === "ai" ? (isFallback ? "bg-amber-500/20 text-amber-500 border border-amber-500/40" : "bg-gradient-to-r from-primary to-accent text-primary-foreground") : ""}>
+                      {message.type === "ai" ? (isFallback ? <AlertTriangle className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />) : "You"}
+                    </AvatarFallback>
+                  </Avatar>
 
-                    {message.type === "ai" && (
-                      <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-border/50">
-                        <div className="flex items-center gap-1.5">
-                          {/* TTS Speaker Read Aloud Button */}
-                          <Button
-                            size="sm"
-                            variant={playingMessageId === message.id ? "default" : "secondary"}
-                            className={`h-8 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                              playingMessageId === message.id
-                                ? "bg-primary text-primary-foreground animate-pulse shadow-md"
-                                : "hover:bg-primary/10 hover:text-primary"
-                            }`}
-                            onClick={() => handleSpeakMessage(message.id, message.content)}
-                            aria-label={playingMessageId === message.id ? "Stop reading message" : "Read response aloud"}
-                          >
-                            {playingMessageId === message.id ? (
-                              <>
-                                <VolumeX className="h-3.5 w-3.5 mr-1.5" />
-                                Stop Reading
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="h-3.5 w-3.5 mr-1.5" />
-                                Read Aloud
-                              </>
-                            )}
-                          </Button>
-
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-                            onClick={() => copyToClipboard(message.content)}
-                            aria-label="Copy response text"
-                          >
-                            <Copy className="h-3.5 w-3.5 mr-1" />
-                            Copy
-                          </Button>
+                  <div className={`flex-1 max-w-2xl ${message.type === "user" ? "flex justify-end" : ""}`}>
+                    <Card
+                      className={`p-4 ${
+                        message.type === "user"
+                          ? "bg-gradient-to-r from-primary to-accent text-primary-foreground border-0 shadow-md"
+                          : isFallback
+                          ? "bg-amber-500/10 border-amber-500/40 shadow-sm backdrop-blur"
+                          : "bg-card/80 backdrop-blur border-border/50 shadow-sm"
+                      }`}
+                    >
+                      {isFallback && (
+                        <div className="flex items-center justify-between mb-3 pb-2 border-b border-amber-500/30">
+                          <Badge variant="outline" className="bg-amber-500/20 text-amber-500 border-amber-500/40 font-bold gap-1 text-[11px]">
+                            <AlertTriangle className="h-3.5 w-3.5 fill-current text-amber-500" />
+                            Offline Fallback Response
+                          </Badge>
+                          <span className="text-[11px] text-amber-500/80 font-medium">Live Gemini API unavailable</span>
                         </div>
+                      )}
+
+                      <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+
+                      {message.type === "ai" && (
+                        <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-border/50">
+                          <div className="flex items-center gap-1.5">
+                            {/* TTS Speaker Read Aloud Button */}
+                            <Button
+                              size="sm"
+                              variant={playingMessageId === message.id ? "default" : "secondary"}
+                              className={`h-8 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                                playingMessageId === message.id
+                                  ? "bg-primary text-primary-foreground animate-pulse shadow-md"
+                                  : "hover:bg-primary/10 hover:text-primary"
+                              }`}
+                              onClick={() => handleSpeakMessage(message.id, message.content)}
+                              aria-label={playingMessageId === message.id ? "Stop reading message" : "Read response aloud"}
+                            >
+                              {playingMessageId === message.id ? (
+                                <>
+                                  <VolumeX className="h-3.5 w-3.5 mr-1.5" />
+                                  Stop Reading
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="h-3.5 w-3.5 mr-1.5" />
+                                  Read Aloud
+                                </>
+                              )}
+                            </Button>
+
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                              onClick={() => copyToClipboard(message.content)}
+                              aria-label="Copy response text"
+                            >
+                              <Copy className="h-3.5 w-3.5 mr-1" />
+                              Copy
+                            </Button>
+
+                            {/* Retry Button for Fallback Responses */}
+                            {isFallback && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 text-xs font-bold rounded-xl border-amber-500/40 text-amber-500 hover:bg-amber-500/20 transition-all cursor-pointer"
+                                onClick={() => {
+                                  const msgIndex = messages.findIndex((m) => m.id === message.id);
+                                  const prevUserMsg = messages
+                                    .slice(0, msgIndex)
+                                    .reverse()
+                                    .find((m) => m.type === "user");
+                                  if (prevUserMsg) {
+                                    sendMessage(prevUserMsg.content);
+                                  } else {
+                                    toast.info("Resending query...");
+                                    sendMessage();
+                                  }
+                                }}
+                              >
+                                <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                                Retry
+                              </Button>
+                            )}
+                          </div>
 
                         <div className="flex items-center gap-1">
                           <Button size="sm" variant="ghost" className="h-8 px-2 text-muted-foreground hover:text-emerald-500 cursor-pointer" aria-label="Mark helpful">
