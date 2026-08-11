@@ -10,12 +10,16 @@ const isLocalhostUrl = (value: string) => {
   return normalized.includes("localhost") || normalized.includes("127.0.0.1") || normalized.includes("::1");
 };
 
+const isStaleIp = (url: string) => {
+  return url.includes("10.133.130.36") || url.includes("10.66.191.36") || url.includes("172.23.27.70");
+};
+
 export const getBaseUrl = () => {
   if (typeof localStorage !== "undefined") {
     const customUrl = localStorage.getItem("custom_api_url");
     if (customUrl && customUrl.trim() !== "") {
       const trimmed = customUrl.trim();
-      if (trimmed.includes("10.133.130.36") || trimmed.includes("10.66.191.36")) {
+      if (isStaleIp(trimmed)) {
         localStorage.removeItem("custom_api_url");
       } else {
         return trimmed;
@@ -24,14 +28,14 @@ export const getBaseUrl = () => {
   }
 
   const envUrl = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (envUrl && envUrl !== "" && !envUrl.includes("10.133.130.36") && !envUrl.includes("10.66.191.36")) {
+  if (envUrl && envUrl !== "" && !isStaleIp(envUrl)) {
     return envUrl;
   }
 
   const isNative = typeof window !== "undefined" && (Capacitor.isNativePlatform() || !!(window as any).Capacitor?.isNativePlatform());
 
   if (isNative) {
-    return "http://172.23.27.70:5000";
+    return "http://192.168.137.184:5000";
   }
 
   // Web Browser fallback

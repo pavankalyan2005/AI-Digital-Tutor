@@ -156,7 +156,7 @@ export function SplashScreen() {
                   type="text"
                   value={customIp}
                   onChange={(e) => setCustomIp(e.target.value)}
-                  placeholder="http://172.23.27.70:5000"
+                  placeholder="http://192.168.137.184:5000"
                   className="w-full bg-black/40 border border-white/20 text-white text-xs px-3 py-2 rounded-xl focus:outline-none focus:border-accent text-center font-mono"
                 />
               </div>
