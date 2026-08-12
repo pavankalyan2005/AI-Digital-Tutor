@@ -48,7 +48,7 @@ async function queryOpenRouter(prompt, systemInstruction = "") {
   messages.push({ role: "user", content: prompt });
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -476,6 +476,67 @@ Becoming a Full Stack developer requires structured progression across multiple 
 *Suggested Follow-up: Ask me to "Create a detailed week-by-week plan" or "Recommend beginner projects".*`;
   }
 
+  if (lowerPrompt.includes("computer network") || lowerPrompt.includes("networking") || lowerPrompt.includes("mcq")) {
+    return `### Computer Networks Multiple Choice Questions (MCQs) 🌐
+
+Here are key practice MCQs for **Computer Networks** with answers and explanations:
+
+---
+
+#### Q1. Which layer of the OSI model is responsible for end-to-end communication, flow control, and error recovery?
+- **A)** Network Layer
+- **B)** Transport Layer
+- **C)** Data Link Layer
+- **D)** Session Layer
+
+**Answer:** **B) Transport Layer**  
+*Explanation:* The Transport Layer (e.g. TCP) manages end-to-end communication, segmentation, flow control (sliding window), and error recovery.
+
+---
+
+#### Q2. What is the standard size of an IPv4 address?
+- **A)** 32 bits (4 bytes)
+- **B)** 64 bits (8 bytes)
+- **C)** 128 bits (16 bytes)
+- **D)** 16 bits (2 bytes)
+
+**Answer:** **A) 32 bits (4 bytes)**  
+*Explanation:* IPv4 addresses are 32-bit numerical labels expressed in dotted-decimal notation (e.g. 192.168.1.1). IPv6 addresses are 128 bits.
+
+---
+
+#### Q3. Which protocol is used to map an IP address to a physical MAC address?
+- **A)** RARP
+- **B)** DHCP
+- **C)** ARP (Address Resolution Protocol)
+- **D)** ICMP
+
+**Answer:** **C) ARP (Address Resolution Protocol)**  
+*Explanation:* ARP resolves IPv4 network layer addresses to physical media access control (MAC) hardware addresses on a local network segment.
+
+---
+
+#### Q4. What port number is used by default for secure HTTPS web traffic?
+- **A)** Port 80
+- **B)** Port 21
+- **C)** Port 443
+- **D)** Port 22
+
+**Answer:** **C) Port 443**  
+*Explanation:* HTTP operates on Port 80 by default, whereas HTTPS operates securely over TLS/SSL on Port 443. Port 22 is SSH and Port 21 is FTP.
+
+---
+
+#### Q5. Which collision detection protocol is used in Ethernet networks?
+- **A)** CSMA/CA
+- **B)** CSMA/CD
+- **C)** ALOHA
+- **D)** Token Ring
+
+**Answer:** **B) CSMA/CD**  
+*Explanation:* Ethernet uses Carrier Sense Multiple Access with Collision Detection (CSMA/CD), while Wi-Fi (802.11) uses CSMA/CA (Collision Avoidance).`;
+  }
+
   return `### I'm currently offline ⚡
 
 You asked about: "${prompt.trim()}"
@@ -504,10 +565,10 @@ export async function getTutorChatResponse(prompt, history = []) {
         New user message: ${prompt}
       `;
 
-      // Allow up to 12.0s response window for full live API generation
+      // Allow up to 30.0s response window for full live API generation
       const onlinePromise = queryAI(contextPrompt, systemInstruction);
       const timeoutCap = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI online query race timeout")), 12000)
+        setTimeout(() => reject(new Error("AI online query race timeout")), 30000)
       );
 
       return await Promise.race([onlinePromise, timeoutCap]);
@@ -546,7 +607,7 @@ export async function getDebuggerResponse(userCode, compilerError) {
 
       const onlinePromise = queryAI(prompt, systemInstruction);
       const timeoutCap = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("AI debug query race timeout")), 2500)
+        setTimeout(() => reject(new Error("AI debug query race timeout")), 30000)
       );
 
       return await Promise.race([onlinePromise, timeoutCap]);
