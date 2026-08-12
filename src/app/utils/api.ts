@@ -272,6 +272,12 @@ export const api = {
     chat: async (prompt: string, history: { role: string; content: string }[], skillContext?: string) => {
       return api.post("/api/ai/chat", { prompt, history, skillContext }, { timeoutMs: 60000 });
     },
+    getChatHistory: async () => {
+      return api.get("/api/ai/chat/history");
+    },
+    clearChatHistory: async () => {
+      return api.delete("/api/ai/chat/history");
+    },
     debug: async (code: string, error: string) => {
       return api.post("/api/ai/debug", { code, error }, { timeoutMs: 60000 });
     },

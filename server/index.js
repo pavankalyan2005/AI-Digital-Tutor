@@ -1685,6 +1685,30 @@ app.post("/api/code/run", authenticateToken, codeExecuteLimiter, async (req, res
   }
 });
 
+// GET persistent AI Tutor chat history
+app.get("/api/ai/chat/history", authenticateToken, async (req, res, next) => {
+  try {
+    const existingChat = await dbGet("SELECT message_history FROM ai_chats WHERE user_id = ? AND type = 'tutor'", [req.user.userId]);
+    if (!existingChat || !existingChat.message_history) {
+      return res.json({ history: [] });
+    }
+    const history = JSON.parse(existingChat.message_history);
+    res.json({ history });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE / clear persistent AI Tutor chat history
+app.delete("/api/ai/chat/history", authenticateToken, async (req, res, next) => {
+  try {
+    await dbRun("DELETE FROM ai_chats WHERE user_id = ? AND type = 'tutor'", [req.user.userId]);
+    res.json({ status: "cleared" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // AI Tutor
 app.post("/api/ai/chat", authenticateToken, async (req, res, next) => {
   try {
@@ -1701,7 +1725,10 @@ app.post("/api/ai/chat", authenticateToken, async (req, res, next) => {
       const existingChat = await dbGet("SELECT id, message_history FROM ai_chats WHERE user_id = ? AND type = 'tutor'", [req.user.userId]);
       let chatHistory = [];
       if (existingChat) chatHistory = JSON.parse(existingChat.message_history);
-      chatHistory.push({ role: "user", content: prompt.trim() }, { role: "ai", content: reply });
+      chatHistory.push(
+        { role: "user", content: prompt.trim(), timestamp: new Date().toISOString() }, 
+        { role: "ai", content: reply, timestamp: new Date().toISOString() }
+      );
       if (existingChat) await dbRun("UPDATE ai_chats SET message_history = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [JSON.stringify(chatHistory), existingChat.id]);
       else await dbRun("INSERT INTO ai_chats (user_id, type, message_history) VALUES (?, 'tutor', ?)", [req.user.userId, JSON.stringify(chatHistory)]);
     } catch (err) {

@@ -82,6 +82,37 @@ export function AITutorChat() {
       });
   }, []);
 
+  // Restore persistent ChatGPT-style chat history on page load
+  useEffect(() => {
+    async function loadSavedChatHistory() {
+      try {
+        const res = await api.ai.getChatHistory();
+        if (res && Array.isArray(res.history) && res.history.length > 0) {
+          const loaded: Message[] = res.history.map((item: any, idx: number) => ({
+            id: idx + 1,
+            type: item.role === "user" ? "user" : "ai",
+            content: item.content,
+            timestamp: item.timestamp ? new Date(item.timestamp) : new Date(),
+          }));
+          setMessages(loaded);
+        }
+      } catch (err) {
+        console.warn("Failed to load saved AI chat history:", err);
+      }
+    }
+    loadSavedChatHistory();
+  }, []);
+
+  const handleClearChat = async () => {
+    try {
+      await api.ai.clearChatHistory();
+      setMessages(initialMessages);
+      toast.success("Started a new conversation!");
+    } catch (err: any) {
+      toast.error("Failed to clear conversation history.");
+    }
+  };
+
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -262,8 +293,17 @@ export function AITutorChat() {
           </div>
         </div>
 
-        {/* Voice Controls Bar */}
+        {/* Voice & History Controls Bar */}
         <div className="flex items-center gap-3">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleClearChat}
+            className="h-8 text-xs font-bold rounded-xl border-border/60 hover:bg-destructive/10 hover:text-destructive cursor-pointer transition-colors"
+          >
+            <RotateCcw className="h-3.5 w-3.5 mr-1" />
+            New Chat
+          </Button>
           {playingMessageId !== null && (
             <Button
               size="sm"
