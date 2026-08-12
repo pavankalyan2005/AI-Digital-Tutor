@@ -221,8 +221,8 @@ export const api = {
     saveModuleNotes: async (id: string, notes: string) => {
       return api.post(`/api/courses/modules/${id}/notes`, { notes });
     },
-    updateProgress: async (lessonId: string, completed: boolean, watchedDuration: number) => {
-      return api.post("/api/progress/update", { lessonId, completed, watchedDuration });
+    updateProgress: async (lessonId: string, completed: boolean, watchedDuration: number, totalDuration?: number) => {
+      return api.post("/api/progress/update", { lessonId, completed, watchedDuration, totalDuration });
     },
     getRoadmap: async (skill: string) => {
       return api.get(`/api/roadmaps/${skill}`);

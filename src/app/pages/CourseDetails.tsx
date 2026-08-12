@@ -40,6 +40,13 @@ interface Course {
   lessons?: Lesson[];
 }
 
+declare global {
+  interface Window {
+    YT: any;
+    onYouTubeIframeAPIReady: any;
+  }
+}
+
 // React ErrorBoundary Component (Task 1 & 8)
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -174,6 +181,12 @@ function CourseDetailsContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const iframeContainerRef = useRef<HTMLDivElement>(null);
+  const playerRef = useRef<any>(null);
+  const intervalRef = useRef<any>(null);
+  const [watchedSec, setWatchedSec] = useState<number>(0);
+  const [showResumeBadge, setShowResumeBadge] = useState<boolean>(false);
+
   // Sync selectedLesson with lessons once data is loaded
   useEffect(() => {
     if (!loading && !selectedLesson && lessons.length > 0) {
@@ -181,9 +194,117 @@ function CourseDetailsContent() {
       setSelectedLesson(lastIncomplete);
       setActiveLevel(lastIncomplete.level);
       setUserNotes(lastIncomplete.custom_note || "");
-      setWatchProgress(lastIncomplete.watchedDuration || 0);
+      const savedSec = Number(lastIncomplete.watchedDuration) || 0;
+      setWatchedSec(savedSec);
+      if (savedSec > 5) setShowResumeBadge(true);
     }
   }, [loading, lessons, selectedLesson]);
+
+  // Load YouTube IFrame API and auto-save / resume video progress
+  useEffect(() => {
+    if (!selectedLesson || !selectedLesson.videoId) return;
+
+    const savedSec = Number(selectedLesson.watchedDuration) || 0;
+    setWatchedSec(savedSec);
+    if (savedSec > 5) setShowResumeBadge(true);
+
+    const saveProgress = async (currTime: number, duration: number) => {
+      if (!selectedLesson || currTime <= 0) return;
+      try {
+        const isDone = duration > 0 && currTime / duration >= 0.9;
+        await api.courses.updateProgress(selectedLesson.id, isDone, Math.floor(currTime), Math.floor(duration));
+      } catch (e) {
+        console.warn("Failed to auto-save course video progress:", e);
+      }
+    };
+
+    const initPlayer = () => {
+      if (!iframeContainerRef.current) return;
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        playerRef.current.destroy();
+        playerRef.current = null;
+      }
+
+      playerRef.current = new window.YT.Player(iframeContainerRef.current, {
+        videoId: selectedLesson.videoId,
+        playerVars: {
+          autoplay: selectedTimestamp !== null ? 1 : 0,
+          modestbranding: 1,
+          rel: 0,
+          enablejsapi: 1,
+          start: selectedTimestamp !== null ? selectedTimestamp : 0
+        },
+        events: {
+          onReady: (event: any) => {
+            if (selectedTimestamp !== null) {
+              event.target.seekTo(selectedTimestamp, true);
+            } else if (savedSec > 5) {
+              event.target.seekTo(savedSec, true);
+            }
+          },
+          onStateChange: (event: any) => {
+            if (event.data === 1) { // PLAYING
+              if (intervalRef.current) clearInterval(intervalRef.current);
+              intervalRef.current = setInterval(() => {
+                if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                  const curr = playerRef.current.getCurrentTime() || 0;
+                  const dur = playerRef.current.getDuration() || 0;
+                  setWatchedSec(Math.floor(curr));
+                  saveProgress(curr, dur);
+                }
+              }, 5000);
+            } else { // PAUSED / ENDED
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+              }
+              if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+                const curr = playerRef.current.getCurrentTime() || 0;
+                const dur = playerRef.current.getDuration() || 0;
+                setWatchedSec(Math.floor(curr));
+                saveProgress(curr, dur);
+              }
+            }
+          }
+        }
+      });
+    };
+
+    if (window.YT && window.YT.Player) {
+      initPlayer();
+    } else {
+      if (!document.getElementById('youtube-iframe-api')) {
+        const tag = document.createElement('script');
+        tag.id = 'youtube-iframe-api';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.body.appendChild(tag);
+      }
+      window.onYouTubeIframeAPIReady = () => {
+        initPlayer();
+      };
+    }
+
+    const handleBeforeUnload = () => {
+      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+        const curr = playerRef.current.getCurrentTime() || 0;
+        const dur = playerRef.current.getDuration() || 0;
+        if (curr > 0) {
+          saveProgress(curr, dur);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        playerRef.current.destroy();
+        playerRef.current = null;
+      }
+    };
+  }, [selectedLesson?.id, selectedLesson?.videoId]);
 
   // Custom Notes State
   const [userNotes, setUserNotes] = useState("");
@@ -488,7 +609,6 @@ function CourseDetailsContent() {
   };
 
   const totalSec = parseDurationToSeconds(selectedLesson?.duration);
-  const watchedSec = selectedLesson?.watchedDuration || 0;
   const currentProgressPercent = totalSec > 0 ? (watchedSec / totalSec) * 100 : watchProgress;
 
   return (
@@ -544,16 +664,37 @@ function CourseDetailsContent() {
               {selectedLesson && <span className="text-[9px] sm:text-[10px] text-muted-foreground font-mono">ID: {selectedLesson?.videoId}</span>}
             </div>
 
+            {/* Saved Video Progress Resume Banner */}
+            {showResumeBadge && watchedSec > 5 && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="m-3 bg-primary/15 border border-primary/40 rounded-2xl px-4 py-2.5 flex items-center justify-between shadow-md"
+              >
+                <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-primary">
+                  <Play className="h-4 w-4 fill-current animate-pulse shrink-0" />
+                  <span>Saved Progress Found: Resuming from {Math.floor(watchedSec / 60)}m {Math.floor(watchedSec % 60)}s</span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
+                      playerRef.current.seekTo(watchedSec, true);
+                      playerRef.current.playVideo();
+                      setShowResumeBadge(false);
+                    }
+                  }}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 rounded-xl text-xs font-bold px-3 py-1 cursor-pointer"
+                >
+                  ▶ Resume Playback
+                </Button>
+              </motion.div>
+            )}
+
             {/* YouTube Embed Rendering */}
             <div className="aspect-video w-full relative bg-black shadow-inner overflow-hidden">
               {selectedLesson?.videoId ? (
-                <iframe
-                  className="w-full h-full absolute inset-0"
-                  src={`https://www.youtube.com/embed/${selectedLesson.videoId}?rel=0&modestbranding=1${selectedTimestamp !== null ? `&start=${selectedTimestamp}&autoplay=1` : ''}`}
-                  title={selectedLesson.title}
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                />
+                <div ref={iframeContainerRef} className="w-full h-full absolute inset-0" />
               ) : (
                 <div className="flex items-center justify-center h-full text-gray-400 text-xs">
                   No video available
